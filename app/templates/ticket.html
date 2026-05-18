@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Ticket {{ ticket.ticket_id }}</title>
+    <link rel="stylesheet" href="/static/css/style.css"> <style>
+        body { font-family: Arial, sans-serif; background: #f4f6f9; margin: 20px; }
+        .card { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); margin-bottom: 20px; }
+        .chat-box { background: #e5ddd5; padding: 20px; border-radius: 8px; max-width: 600px; }
+        .message { background: white; padding: 10px 15px; border-radius: 8px; margin-bottom: 10px; max-width: 80%; }
+        .message.system { background: #dcf8c6; margin-left: auto; } /* Mensajes tuyos/sistema */
+        .meta { font-size: 0.8em; color: #666; margin-top: 5px; display: block; }
+    </style>
+</head>
+<body>
+
+    <div class="card">
+        <h1>🎟️ Ticket: {{ ticket.ticket_id }}</h1>
+        <p><strong>Empresa:</strong> {{ ticket.empresa }}</p>
+        <p><strong>Ubicación:</strong> {{ ticket.localizacion }}</p>
+        <p><strong>Teléfono:</strong> {{ ticket.telefono }}</p>
+        <p><strong>Estado del sistema:</strong> <span style="color: green;">{{ ticket.estado }}</span></p>
+    </div>
+
+    <h2>💬 Historial de la Conversación</h2>
+    <div class="chat-box">
+        
+        <div class="message">
+            <strong>Descripción Inicial:</strong>
+            <p>{{ ticket.descripcion }}</p>
+            <span class="meta">{{ ticket.created_at.strftime('%d/%m/%Y %H:%M') }}</span>
+        </div>
+
+        {% for msg in messages %}
+            <div class="message {% if 'tu_correo' in msg.remitente %}system{% endif %}">
+                <strong>{{ msg.remitente }}:</strong>
+                <p>{{ msg.contenido }}</p>
+                <span class="meta">{{ msg.fecha_envio.strftime('%d/%m/%Y %H:%M') }}</span>
+            </div>
+        {% endfor %}
+
+    </div>
+
+    <p><a href="/">⬅️ Volver al Dashboard</a></p>
+</body>
+</html>
