@@ -12,5 +12,6 @@ class Message(Base):
     remitente = Column(String)
     contenido = Column(Text)
     fecha_envio = Column(DateTime, default=datetime.utcnow)
+    outlook_message_id = Column(String, nullable=True)  # id del correo en Outlook (para no duplicar)
 
     ticket = relationship("Ticket", back_populates="messages")

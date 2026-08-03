@@ -1,55 +1,114 @@
 # app/services/email_listener.py
+import re
 import time
 from sqlalchemy.orm import Session
 from app.database import SessionLocal
 from app.services.outlook_service import OutlookService
-from app.services.ticket_service import TicketService
+from app.services.ticket_service import TicketService, guardar_adjunto
+from app.services.email_utils import cuerpo_legible
+from app.models.ticket import Ticket
+from app.models.message import Message
+
+_AUTORESPUESTA = re.compile(
+    r"out of (the )?office|automatic reply|respuesta autom[aá]tica|fuera de la oficina",
+    re.IGNORECASE,
+)
+
+
+def _es_autorespuesta(asunto: str) -> bool:
+    return bool(_AUTORESPUESTA.search(asunto or ""))
+
+
+def _cuerpo_limpio(msg) -> str:
+    es_html = (getattr(msg, "body_type", "html") or "html").lower() == "html"
+    return cuerpo_legible(msg.body or "", es_html=es_html)
+
+
+def _recibido(msg):
+    """Hora real del correo, sin zona horaria (para guardar en la BD)."""
+    r = getattr(msg, "received", None)
+    if r is not None and r.tzinfo is not None:
+        r = r.astimezone().replace(tzinfo=None)
+    return r
+
+
+def _sincronizar_hilo(db: Session, outlook: OutlookService, conv: str):
+    """Trae el HILO COMPLETO de Outlook y lo refleja en la incidencia:
+    crea el ticket si no existe (con el correo más antiguo como descripción) y
+    añade como mensajes todos los correos del hilo que aún no tengamos."""
+    hilo = outlook.obtener_conversacion(conv)
+    # Fuera respuestas automáticas (fuera de oficina): son ruido
+    hilo = [m for m in hilo if not _es_autorespuesta(m.subject or "")]
+    if not hilo:
+        return
+
+    ticket = db.query(Ticket).filter(Ticket.outlook_conversation_id == conv).first()
+
+    # 1) Si no existe, lo creamos a partir del correo MÁS ANTIGUO del hilo
+    if not ticket:
+        primero = hilo[0]
+        ticket = TicketService.create_from_email(
+            db=db, email_body=_cuerpo_limpio(primero), conversation_id=conv,
+            recibido=_recibido(primero), email_id=getattr(primero, "object_id", None),
+            asunto=primero.subject or "", remitente=str(primero.sender),
+        )
+        for nombre, datos in OutlookService.descargar_adjuntos(primero):
+            guardar_adjunto(db, ticket.id, nombre, datos, message_id=None)
+        print(f"[OK] Nueva incidencia: {ticket.ticket_id} (asunto: {(primero.subject or '')[:40]})")
+
+    # 2) Sincronizamos el resto de correos del hilo como mensajes (solo los nuevos)
+    for m in hilo:
+        mid = getattr(m, "object_id", None)
+        # El correo inicial ya es la descripción del ticket
+        if mid and mid == ticket.email_inicial_id:
+            continue
+        # ¿Ya lo teníamos guardado?
+        if mid and db.query(Message).filter(Message.outlook_message_id == mid).first():
+            continue
+        actualizado = TicketService.append_reply_to_thread(
+            db=db, conversation_id=conv, sender=str(m.sender),
+            body=_cuerpo_limpio(m), message_id=mid, recibido=_recibido(m),
+        )
+        if actualizado:
+            nuevo_msg = db.query(Message).filter(Message.outlook_message_id == mid).first()
+            for nombre, datos in OutlookService.descargar_adjuntos(m):
+                guardar_adjunto(db, ticket.id, nombre, datos,
+                                message_id=(nuevo_msg.id if nuevo_msg else None))
+
 
 def start_email_listener():
-    """
-    Bucle optimizado y controlado de monitorización de incidencias.
-    Se ejecuta de forma asíncrona sin congelar la aplicación web.
-    """
-    print("👀 Daemon de escucha de correos activado. Buscando incidencias RFID...")
-    
-    # Inicializamos el servicio de Microsoft
+    """Vigilante de incidencias: detecta hilos con actividad en la Bandeja de
+    entrada y sincroniza la CONVERSACIÓN COMPLETA (recibidos + enviados)."""
+    print("[INFO] Vigilante de correos activado. Buscando incidencias RFID...")
+
     try:
         outlook = OutlookService()
     except Exception as e:
-        print(f"❌ Error crítico al conectar con la API de Outlook: {str(e)}")
+        print(f"[ERROR] No se pudo conectar con la API de Outlook: {str(e)}")
         return
 
     while True:
-        # Creamos una sesión de Base de Datos nueva para cada ciclo de revisión
         db: Session = SessionLocal()
         try:
-            mensajes_nuevos = outlook.obtener_correos_nuevos()
-            
-            for msg in mensajes_nuevos:
-                # Verificamos si el cuerpo del correo contiene la plantilla de tu incidencia
-                if "INCIDENCIA RFID" in msg.subject or "Localización de la tienda:" in msg.body:
-                    print(f"📩 Detectada nueva incidencia de: {msg.sender}")
-                    
-                    # 1. Guardamos en tu base de datos (Tu propio Praxedo) y generamos el ID único
-                    nuevo_ticket = TicketService.create_from_email(
-                        db=db, 
-                        email_body=msg.body, 
-                        conversation_id=msg.conversation_id
-                    )
-                    
-                    # 2. Modificamos el asunto en Outlook y lo movemos a la carpeta .01PROCESADO
-                    outlook.procesar_y_mover_correo(
-                        message=msg, 
-                        ticket_id=nuevo_ticket.ticket_id
-                    )
-                else:
-                    # Si es un correo normal, simplemente lo ignoramos para que el usuario lo lea
-                    pass
-                    
-        except Exception as e:
-            print(f"⚠️ Error durante el ciclo de escaneo: {str(e)}")
-        finally:
-            db.close() # Cerramos siempre la conexión a la base de datos para no saturar SQLite
+            # Miramos la bandeja para detectar QUÉ hilos tienen actividad reciente
+            nuevos = list(outlook.obtener_correos_nuevos())
+            convs = []
+            for msg in nuevos:
+                c = msg.conversation_id
+                if c and c not in convs:
+                    convs.append(c)
 
-        # Pausa de control profesional (30 segundos de respiro para la API y tu CPU)
+            # Para cada hilo con actividad, sincronizamos la conversación entera
+            for conv in convs:
+                try:
+                    _sincronizar_hilo(db, outlook, conv)
+                except Exception as e:
+                    print(f"[AVISO] No se pudo sincronizar un hilo: {str(e)}")
+
+        except Exception as e:
+            print(f"[AVISO] Error durante el ciclo de escaneo: {str(e)}")
+        finally:
+            db.close()
+
+        # Pausa entre escaneos (30 s de respiro para la API y la CPU)
         time.sleep(30)

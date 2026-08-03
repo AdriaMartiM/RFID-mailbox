@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Panel de KPIs</title>
+    <link rel="stylesheet" href="/static/css/style.css?v=20260626e">
+</head>
+<body>
+<div class="app">
+    <header class="topbar">
+        <a class="btn" href="/">&larr; Incidencias</a>
+        <div class="brand">Panel de KPIs</div>
+        <div class="spacer"></div>
+        <a class="btn" href="/biblioteca">Biblioteca</a>
+        <button class="btn" id="refrescar">Actualizar</button>
+    </header>
+
+    <div class="kpi-page">
+        <div class="kpi-filtros">
+            <div class="periodo-chips" id="periodoChips">
+                <button class="chip-p active" data-p="siempre">Siempre</button>
+                <button class="chip-p" data-p="semana">Última semana</button>
+                <button class="chip-p" data-p="mes">Último mes</button>
+                <button class="chip-p" data-p="anio">Último año</button>
+            </div>
+            <select id="filtroMarca"><option value="TODAS">Todas las marcas</option></select>
+        </div>
+        <div id="contenido"><div class="list-msg">Cargando…</div></div>
+    </div>
+</div>
+
+<script>
+const $ = (s, c=document) => c.querySelector(s);
+function escapeHtml(s){ return String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+
+const COLORES = ["#0f6cbd","#c19c00","#6b6b6b","#2a9d5c","#7a5cc0","#c0392b","#16a085","#e67e22"];
+
+function kpiPorLabel(kpis, label){ const k = kpis.find(x => x.label === label); return k ? k.valor : "—"; }
+
+function tarjeta(titulo, valor, color="#0f6cbd", grande=false){
+    return `<div class="kpi-card ${grande?'grande':''}" style="--c:${color}">
+        <div class="kpi-titulo">${escapeHtml(titulo)}</div>
+        <div class="kpi-valor">${escapeHtml(valor)}</div>
+    </div>`;
+}
+
+function barras(datos, max){
+    return `<div class="barras">` + datos.map((d,i) => `
+        <div class="barra-row">
+            <span class="barra-lbl" title="${escapeHtml(d[0])}">${escapeHtml(d[0])}</span>
+            <span class="barra-track"><span class="barra-fill" style="width:${max?Math.max(3,d[1]/max*100):0}%;background:${COLORES[i%COLORES.length]}"></span></span>
+            <span class="barra-num">${d[1]}</span>
+        </div>`).join("") + `</div>`;
+}
+
+function donut(cerradas, abiertas){
+    const total = cerradas + abiertas;
+    const pct = total ? Math.round(cerradas/total*100) : 0;
+    const grados = total ? (cerradas/total*360) : 0;
+    return `
+        <div class="donut-wrap">
+            <div class="donut" style="background:conic-gradient(#2a9d5c 0 ${grados}deg, #e1dfdd ${grados}deg 360deg);">
+                <div class="donut-hole"><b>${pct}%</b><span>resueltas</span></div>
+            </div>
+            <div class="donut-leyenda">
+                <div><span class="leg" style="background:#2a9d5c"></span> Completadas <b>${cerradas}</b></div>
+                <div><span class="leg" style="background:#e1dfdd"></span> Sin completar <b>${abiertas}</b></div>
+            </div>
+        </div>`;
+}
+
+let periodo = "siempre";
+let marca = "TODAS";
+let marcasCargadas = false;
+
+async function cargar(){
+    const params = new URLSearchParams();
+    if(periodo !== "siempre") params.set("periodo", periodo);
+    if(marca !== "TODAS") params.set("marca", marca);
+    let d;
+    try { d = await (await fetch("/api/v1/kpis?" + params.toString(), {cache:"no-store"})).json(); }
+    catch(e){ $("#contenido").innerHTML = '<div class="list-msg">No se pudieron cargar los KPIs.</div>'; return; }
+
+    // Rellena el desplegable de marcas la primera vez
+    if(!marcasCargadas){
+        const sel = $("#filtroMarca");
+        sel.innerHTML = '<option value="TODAS">Todas las marcas</option>' +
+            (d.marcas||[]).map(m => `<option value="${escapeHtml(m)}">${escapeHtml(m)}</option>`).join("");
+        sel.value = marca;
+        marcasCargadas = true;
+    }
+
+    const k = d.kpis;
+    const maxEstado = Math.max(d.datos.nuevas, d.datos.enprog, d.datos.cerradas, 1);
+    const maxMarca = Math.max(...d.ranking_marca.map(x=>x[1]), 1);
+    const maxTienda = Math.max(...d.ranking_tienda.map(x=>x[1]), 1);
+
+    const aviso = (d.sla_vencidas > 0 || d.sla_riesgo > 0) ? `
+        <div class="sla-banner ${d.sla_vencidas>0?'vencida':'riesgo'}">
+            ⏱ <b>${d.sla_vencidas}</b> incidencia${d.sla_vencidas===1?'':'s'} sin responder a tiempo
+            (más de ${d.sla_horas} h laborables)${d.sla_riesgo>0?` · <b>${d.sla_riesgo}</b> en riesgo`:''}.
+            <a href="/?estado=TODOS">Ver incidencias</a>
+        </div>` : `<div class="sla-banner ok">✓ Todas las incidencias abiertas están respondidas dentro del tiempo objetivo.</div>`;
+
+    $("#contenido").innerHTML = `
+        ${aviso}
+        <div class="kpi-cards">
+            ${tarjeta("Total de incidencias", kpiPorLabel(k,"Total de incidencias"), "#0f6cbd")}
+            ${tarjeta("Nuevas", kpiPorLabel(k,"Nuevas"), "#0f6cbd")}
+            ${tarjeta("En progreso", kpiPorLabel(k,"En progreso"), "#c19c00")}
+            ${tarjeta("Cerradas", kpiPorLabel(k,"Cerradas"), "#2a9d5c")}
+            ${tarjeta("% resueltas", kpiPorLabel(k,"% resueltas"), "#0f6cbd", true)}
+            ${tarjeta("Tiempo medio de respuesta", kpiPorLabel(k,"Tiempo medio de respuesta"), "#16a085")}
+            ${tarjeta("Tiempo medio de resolución", kpiPorLabel(k,"Tiempo medio de resolución"), "#16a085")}
+            ${tarjeta("Abiertas con más de 3 días", kpiPorLabel(k,"Abiertas con más de 3 días"), "#c0392b")}
+        </div>
+        <div class="kpi-graficos">
+            <div class="kpi-panel">
+                <div class="kpi-panel-tit">Incidencias por estado</div>
+                ${barras([["Nuevas",d.datos.nuevas],["En progreso",d.datos.enprog],["Cerradas",d.datos.cerradas]], maxEstado)}
+            </div>
+            <div class="kpi-panel">
+                <div class="kpi-panel-tit">Completadas vs sin completar</div>
+                ${donut(d.datos.cerradas, d.datos.abiertas)}
+            </div>
+            <div class="kpi-panel">
+                <div class="kpi-panel-tit">Marcas con más incidencias</div>
+                ${d.ranking_marca.length ? barras(d.ranking_marca, maxMarca) : '<p class="form-hint">Sin datos.</p>'}
+            </div>
+            <div class="kpi-panel">
+                <div class="kpi-panel-tit">Tiendas con más incidencias</div>
+                ${d.ranking_tienda.length ? barras(d.ranking_tienda, maxTienda) : '<p class="form-hint">Sin datos.</p>'}
+            </div>
+        </div>
+        <p class="kpi-nota">Los tiempos se miden en horario laboral (L–V, 08:00–17:00).</p>`;
+}
+
+$("#refrescar").addEventListener("click", cargar);
+$$ = (s) => Array.from(document.querySelectorAll(s));
+$("#periodoChips").addEventListener("click", e => {
+    const b = e.target.closest(".chip-p"); if(!b) return;
+    periodo = b.dataset.p;
+    $$("#periodoChips .chip-p").forEach(x => x.classList.toggle("active", x === b));
+    cargar();
+});
+$("#filtroMarca").addEventListener("change", e => { marca = e.target.value; cargar(); });
+cargar();
+</script>
+</body>
+</html>

@@ -1,0 +1,854 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Gestor de Incidencias RFID</title>
+    <link rel="stylesheet" href="/static/css/style.css?v=20260626e">
+</head>
+<body>
+<div class="app">
+
+    <!-- ====== Barra superior / comandos ====== -->
+    <header class="topbar">
+        <button class="collapse-btn" id="toggleNav" title="Mostrar/ocultar carpetas">&#9776;</button>
+        <div class="brand">Incidencias RFID</div>
+        <div class="search">
+            <input type="text" id="search" placeholder="Buscar por empresa, ID, ubicación o texto…" autocomplete="off">
+        </div>
+        <div class="spacer"></div>
+        <a class="btn" href="/kpis">Panel de KPIs</a>
+        <button class="btn" id="exportar">Exportar Excel</button>
+        <button class="btn" id="refresh">Actualizar</button>
+    </header>
+
+    <!-- ====== Modal: exportar a Excel ====== -->
+    <div class="modal-overlay" id="modalExport" style="display:none;">
+        <div class="modal">
+            <div class="modal-head">
+                <span>Exportar a Excel</span>
+                <button class="modal-x" id="modalClose">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p class="modal-hint">Elige qué incidencias exportar y qué columnas incluir.</p>
+                <div class="export-filtros">
+                    <label class="fld"><span>Marca</span>
+                        <select id="expMarca"><option value="TODAS">Todas las marcas</option></select>
+                    </label>
+                    <label class="fld"><span>Estado</span>
+                        <select id="expEstado">
+                            <option value="TODOS">Todas</option>
+                            <option value="PROCESADO">Nuevas</option>
+                            <option value="EN_PROGRESO">En progreso</option>
+                            <option value="CERRADO">Cerradas</option>
+                        </select>
+                    </label>
+                </div>
+                <div class="col-actions">
+                    <span style="font-size:12px;color:var(--text-faint);align-self:center;margin-right:auto;">Columnas:</span>
+                    <button class="link-btn" id="colAll">Marcar todas</button>
+                    <button class="link-btn" id="colNone">Desmarcar todas</button>
+                </div>
+                <div id="colList" class="col-list"></div>
+            </div>
+            <div class="modal-foot">
+                <button class="btn-light" id="modalCancel">Cancelar</button>
+                <button class="btn-primary" id="modalDownload">Descargar Excel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ====== Modal: nuevo / editar recordatorio ====== -->
+    <div class="modal-overlay" id="modalRec" style="display:none;">
+        <div class="modal" style="width:520px;">
+            <div class="modal-head">
+                <span id="recTitulo">Nuevo recordatorio</span>
+                <button class="modal-x" id="recX">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p class="modal-hint">Una incidencia o tarea que <b>no llega por correo</b>. Solo es un recordatorio: no crea ticket ni conversación.</p>
+                <div class="form-grid">
+                    <label class="fld full"><span>Recordatorio</span>
+                        <textarea id="r_titulo" rows="2" placeholder="Ej: Llamar a la tienda de Zaragoza para revisar la antena"></textarea></label>
+                    <label class="fld"><span>Marca / tienda (opcional)</span>
+                        <input id="r_empresa" list="marcasRec" placeholder="Ej: Blue Banana"></label>
+                    <label class="fld"><span>Prioridad</span>
+                        <select id="r_prioridad">
+                            <option value="baja">Baja</option>
+                            <option value="normal" selected>Normal</option>
+                            <option value="alta">Alta</option>
+                        </select></label>
+                    <label class="fld full"><span>Detalle (opcional)</span>
+                        <textarea id="r_detalle" rows="4" placeholder="Notas adicionales…"></textarea></label>
+                </div>
+                <datalist id="marcasRec"></datalist>
+            </div>
+            <div class="modal-foot">
+                <button class="btn-light" id="recCancelar">Cancelar</button>
+                <button class="btn-primary" id="recGuardar">Guardar</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ====== Cuerpo de 3 paneles ====== -->
+    <div class="body">
+
+        <!-- Panel de carpetas / filtros -->
+        <aside class="nav" id="nav">
+            <div class="nav-header">Carpetas</div>
+            <div class="folder active" data-estado="TODOS">
+                <span class="f-dot all"></span><span class="f-name">Todas</span><span class="count" data-count="TODOS">0</span>
+            </div>
+            <div class="folder" data-estado="PROCESADO">
+                <span class="f-dot PROCESADO"></span><span class="f-name">Nuevas</span><span class="count" data-count="PROCESADO">0</span>
+            </div>
+            <div class="folder" data-estado="EN_PROGRESO">
+                <span class="f-dot EN_PROGRESO"></span><span class="f-name">En progreso</span><span class="count" data-count="EN_PROGRESO">0</span>
+            </div>
+            <div class="folder" data-estado="CERRADO">
+                <span class="f-dot CERRADO"></span><span class="f-name">Cerradas</span><span class="count" data-count="CERRADO">0</span>
+            </div>
+
+            <div class="nav-sep"></div>
+            <div class="folder" data-estado="PENDIENTES">
+                <span class="f-dot PENDIENTES"></span><span class="f-name">Pendientes</span><span class="count" data-count="PENDIENTES">0</span>
+            </div>
+
+            <div class="nav-sep"></div>
+            <a class="folder folder-link" href="/biblioteca">
+                <span class="f-dot kb"></span><span class="f-name">Biblioteca</span>
+            </a>
+            <div id="temasNav"></div>
+        </aside>
+
+        <div class="splitter" data-target="nav"></div>
+
+        <!-- Panel central: lista -->
+        <section class="list-pane" id="listPane">
+            <div class="list-toolbar">
+                <span class="title" id="listTitle">Todas las incidencias</span>
+                <span class="sub" id="listCount">—</span>
+            </div>
+            <!-- Filtro por fecha de cierre (solo visible en la carpeta Cerradas) -->
+            <div class="range-bar" id="rangeBar" style="display:none;">
+                <span class="range-label">Cerradas en:</span>
+                <button class="chip" data-range="SEMANA">Semana</button>
+                <button class="chip" data-range="MES">Mes</button>
+                <button class="chip" data-range="ANYO">Año</button>
+                <button class="chip active" data-range="TODO">Total</button>
+            </div>
+            <div class="list" id="list">
+                <div class="list-msg">Cargando…</div>
+            </div>
+        </section>
+
+        <div class="splitter" data-target="list"></div>
+
+        <!-- Panel de lectura -->
+        <section class="reader" id="reader">
+            <div class="reader-empty" id="readerEmpty">
+                <p>Selecciona una incidencia para ver la conversación.</p>
+            </div>
+            <div id="readerContent" style="display:none; flex:1 1 auto; min-height:0; flex-direction:column;"></div>
+        </section>
+
+    </div>
+</div>
+
+<script>
+/* ============================================================
+   Estado del cliente
+   ============================================================ */
+const ESTADO_LABEL = { TODOS:"Todas las incidencias", PROCESADO:"Nuevas (recién llegadas)", EN_PROGRESO:"En progreso", CERRADO:"Cerradas", PENDIENTES:"Pendientes (recordatorios manuales)" };
+const ESTADO_NICE  = { PROCESADO:"Nueva", EN_PROGRESO:"En progreso", CERRADO:"Cerrada" };
+
+let allTickets = [];
+let recordatorios = [];
+let filtroEstado = "TODOS";
+let busqueda = "";
+let seleccionado = null;
+let rangoCerradas = "TODO";   // SEMANA | MES | ANYO | TODO
+
+// Milisegundos de cada rango (aprox.)
+const RANGO_MS = { SEMANA: 7*864e5, MES: 30*864e5, ANYO: 365*864e5 };
+
+/* ---------- Utilidades ---------- */
+const $ = (sel, ctx=document) => ctx.querySelector(sel);
+const $$ = (sel, ctx=document) => Array.from(ctx.querySelectorAll(sel));
+
+function escapeHtml(s){
+    return String(s ?? "").replace(/[&<>"']/g, c => (
+        {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]
+    ));
+}
+
+function formatFecha(iso, conHora=true){
+    if(!iso) return "—";
+    const d = new Date(iso);
+    if(isNaN(d)) return "—";
+    const opt = conHora
+        ? { day:"2-digit", month:"short", hour:"2-digit", minute:"2-digit" }
+        : { day:"2-digit", month:"2-digit", year:"numeric" };
+    return d.toLocaleString("es-ES", opt);
+}
+
+/* ============================================================
+   Carga y renderizado de la lista
+   ============================================================ */
+async function cargarTickets(){
+    $("#list").innerHTML = '<div class="list-msg">Cargando…</div>';
+    try {
+        const r = await fetch("/api/v1/tickets");
+        if(!r.ok) throw new Error(r.status);
+        const data = await r.json();
+        allTickets = data.tickets || [];
+        actualizarContadores();
+        renderLista();
+    } catch(e){
+        $("#list").innerHTML = '<div class="list-msg">No se pudieron cargar las incidencias.</div>';
+    }
+}
+
+function actualizarContadores(){
+    const counts = { TODOS: allTickets.length, PROCESADO:0, EN_PROGRESO:0, CERRADO:0 };
+    allTickets.forEach(t => { if(counts[t.estado] !== undefined) counts[t.estado]++; });
+    counts.PENDIENTES = recordatorios.filter(r => !r.hecho).length;
+    $$("[data-count]").forEach(el => el.textContent = counts[el.dataset.count] ?? 0);
+}
+
+function ticketsFiltrados(){
+    const q = busqueda.trim().toLowerCase();
+    const esCerradas = filtroEstado === "CERRADO";
+    const limite = (esCerradas && RANGO_MS[rangoCerradas])
+        ? Date.now() - RANGO_MS[rangoCerradas] : null;
+
+    const items = allTickets.filter(t => {
+        if(filtroEstado !== "TODOS" && t.estado !== filtroEstado) return false;
+        // En Cerradas, filtramos por la fecha de cierre (updated_at)
+        if(limite !== null){
+            const cierre = new Date(t.updated_at || t.created_at).getTime();
+            if(isNaN(cierre) || cierre < limite) return false;
+        }
+        if(!q) return true;
+        return [t.empresa, t.ticket_id, t.localizacion, t.preview, t.telefono]
+            .some(v => (v||"").toLowerCase().includes(q));
+    });
+
+    // Las más nuevas arriba (descendente). En Cerradas, por fecha de cierre.
+    const campo = esCerradas ? (t => t.updated_at || t.created_at) : (t => t.created_at);
+    items.sort((a, b) => new Date(campo(b)) - new Date(campo(a)));
+    return items;
+}
+
+function renderLista(){
+    if(filtroEstado === "PENDIENTES"){ renderRecordatorios(); return; }
+    const items = ticketsFiltrados();
+    $("#listTitle").textContent = ESTADO_LABEL[filtroEstado];
+    $("#listCount").textContent = items.length + (items.length === 1 ? " incidencia" : " incidencias");
+
+    if(items.length === 0){
+        $("#list").innerHTML = '<div class="list-msg">Sin incidencias que mostrar.</div>';
+        return;
+    }
+    const ahora = Date.now();
+    $("#list").innerHTML = items.map(t => {
+        const llegada = t.hora_llegada || t.created_at;
+        const dias = (ahora - new Date(llegada).getTime()) / 864e5;
+        // Resalta en rojo las abiertas con 1 día o más sin cerrar
+        const urgente = t.estado !== "CERRADO" && dias >= 1;
+        const loc = escapeHtml(t.localizacion);
+        return `
+        <div class="ticket-item ${t.ticket_id === seleccionado ? "active" : ""} ${t.nuevo_mensaje ? "novedad" : ""}" data-id="${escapeHtml(t.ticket_id)}">
+            <span class="dot ${t.estado}"></span>
+            <span class="empresa">${escapeHtml(t.empresa) || "(sin empresa)"}${loc ? ` <span class="loc">· ${loc}</span>` : ""}</span>
+            <span class="when ${urgente ? "urgente" : ""}">${(t.sla === "vencida" || t.sla === "riesgo") ? `<span class="sla-dot ${t.sla}" title="Sin responder${t.horas_sin_responder ? " (" + Math.round(t.horas_sin_responder) + "h laborables)" : ""}"></span>` : ""}${antiguedad(llegada)}</span>
+            <span class="preview">${escapeHtml(t.descripcion_corta) || "Sin descripción"}</span>
+            ${t.proximo_paso ? `<span class="next-tag">→ ${escapeHtml(t.proximo_paso)}</span>` : ""}
+            <span class="id-tag">${escapeHtml(t.ticket_id)} · ${t.num_mensajes} nota${t.num_mensajes === 1 ? "" : "s"}</span>
+            ${t.nuevo_mensaje ? '<span class="aviso-nuevo">Mensaje nuevo</span>' : ''}
+        </div>`;
+    }).join("");
+
+    $$(".ticket-item", $("#list")).forEach(el =>
+        el.addEventListener("click", () => abrirTicket(el.dataset.id))
+    );
+}
+
+/* ============================================================
+   Pendientes (recordatorios manuales, no llegan por correo)
+   ============================================================ */
+async function cargarRecordatorios(){
+    try { recordatorios = (await (await fetch("/api/v1/recordatorios", {cache:"no-store"})).json()).recordatorios || []; }
+    catch(e){ recordatorios = []; }
+    actualizarContadores();
+    if(filtroEstado === "PENDIENTES") renderLista();
+}
+
+const PRIO_TXT = { alta:"Prioridad alta", normal:"Prioridad normal", baja:"Prioridad baja" };
+
+function renderRecordatorios(){
+    $("#listTitle").textContent = ESTADO_LABEL.PENDIENTES;
+    $("#rangeBar").style.display = "none";
+    const pend = recordatorios.filter(r => !r.hecho).length;
+    $("#listCount").textContent = pend + (pend === 1 ? " pendiente" : " pendientes");
+
+    let html = `<button class="btn-add-rec" id="btnNuevoRec">+ Nuevo recordatorio</button>`;
+    if(recordatorios.length === 0){
+        html += '<div class="list-msg">No hay recordatorios. Añade uno con «+ Nuevo recordatorio».</div>';
+    } else {
+        html += recordatorios.map(r => `
+        <div class="rec-card prio-${r.prioridad} ${r.hecho ? "hecho" : ""}" data-id="${r.id}">
+            <button class="rec-check" data-toggle="${r.id}" title="${r.hecho ? "Marcar como pendiente" : "Marcar como hecho"}">${r.hecho ? "✓" : ""}</button>
+            <div class="rec-cuerpo">
+                <div class="rec-titulo">${escapeHtml(r.titulo)}</div>
+                ${r.detalle ? `<div class="rec-detalle">${escapeHtml(r.detalle)}</div>` : ""}
+                <div class="rec-meta">
+                    ${r.empresa ? `<span class="rec-marca">${escapeHtml(r.empresa)}</span>` : ""}
+                    <span class="rec-prio prio-${r.prioridad}">${PRIO_TXT[r.prioridad] || "Prioridad normal"}</span>
+                    <span class="rec-fecha">${formatFecha(r.created_at)}</span>
+                </div>
+            </div>
+            <div class="rec-acc">
+                <button class="link-btn" data-edit="${r.id}">Editar</button>
+                <button class="link-btn" data-del="${r.id}">Eliminar</button>
+            </div>
+        </div>`).join("");
+    }
+    $("#list").innerHTML = html;
+    $("#btnNuevoRec").addEventListener("click", () => abrirModalRec(null));
+    $$("#list [data-toggle]").forEach(b => b.addEventListener("click", () => {
+        const r = recordatorios.find(x => x.id === parseInt(b.dataset.toggle, 10));
+        if(r) toggleRecHecho(r.id, !r.hecho);
+    }));
+    $$("#list [data-edit]").forEach(b => b.addEventListener("click", () => abrirModalRec(parseInt(b.dataset.edit, 10))));
+    $$("#list [data-del]").forEach(b => b.addEventListener("click", () => borrarRec(parseInt(b.dataset.del, 10))));
+}
+
+let recEditId = null;
+function abrirModalRec(id){
+    recEditId = id || null;
+    const r = id ? recordatorios.find(x => x.id === id) : null;
+    $("#recTitulo").textContent = id ? "Editar recordatorio" : "Nuevo recordatorio";
+    $("#r_titulo").value = r ? r.titulo : "";
+    $("#r_empresa").value = r ? r.empresa : "";
+    $("#r_prioridad").value = r ? r.prioridad : "normal";
+    $("#r_detalle").value = r ? r.detalle : "";
+    const marcas = [...new Set(allTickets.map(t => (t.empresa||"").trim()).filter(Boolean))].sort();
+    $("#marcasRec").innerHTML = marcas.map(m => `<option value="${escapeHtml(m)}">`).join("");
+    $("#modalRec").style.display = "flex";
+    $("#r_titulo").focus();
+}
+function cerrarModalRec(){ $("#modalRec").style.display = "none"; recEditId = null; }
+async function guardarRec(){
+    const payload = { titulo:_val("#r_titulo"), empresa:_val("#r_empresa"), prioridad:_val("#r_prioridad"), detalle:_val("#r_detalle") };
+    if(!payload.titulo.trim()){ alert("Escribe el recordatorio."); $("#r_titulo").focus(); return; }
+    try {
+        const nueva = !recEditId;
+        const url = nueva ? "/api/v1/recordatorios" : `/api/v1/recordatorios/${recEditId}`;
+        const r = await fetch(url, { method: nueva ? "POST" : "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+        if(!r.ok){ const e = await r.json().catch(() => ({})); throw new Error(e.detail || r.status); }
+        cerrarModalRec();
+        await cargarRecordatorios();
+    } catch(e){ alert("No se pudo guardar: " + e.message); }
+}
+async function toggleRecHecho(id, hecho){
+    try { await fetch(`/api/v1/recordatorios/${id}`, { method:"PUT", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ hecho }) }); }
+    catch(e){ /* silencioso */ }
+    await cargarRecordatorios();
+}
+async function borrarRec(id){
+    if(!confirm("¿Eliminar este recordatorio?")) return;
+    await fetch(`/api/v1/recordatorios/${id}`, { method:"DELETE" });
+    await cargarRecordatorios();
+}
+
+/* ============================================================
+   Panel de lectura
+   ============================================================ */
+async function abrirTicket(id){
+    seleccionado = id;
+    $$(".ticket-item").forEach(el => el.classList.toggle("active", el.dataset.id === id));
+
+    $("#readerEmpty").style.display = "none";
+    const cont = $("#readerContent");
+    cont.style.display = "flex";
+    cont.innerHTML = '<div class="reader-empty">Cargando conversación…</div>';
+
+    try {
+        const r = await fetch(`/api/v1/tickets/${encodeURIComponent(id)}`);
+        if(!r.ok) throw new Error(r.status);
+        renderReader(await r.json());
+        // Abrir = leer: quitamos el aviso de "Mensaje nuevo" también en la lista
+        const t = allTickets.find(x => x.ticket_id === id);
+        if(t && t.nuevo_mensaje){ t.nuevo_mensaje = false; renderLista(); }
+    } catch(e){
+        cont.innerHTML = '<div class="reader-empty">No se pudo cargar la incidencia.</div>';
+    }
+}
+
+// Antigüedad legible desde la llegada (para ver prioridad de un vistazo)
+function antiguedad(iso){
+    if(!iso) return "";
+    const ms = Date.now() - new Date(iso).getTime();
+    if(isNaN(ms) || ms < 0) return "";
+    const dias = Math.floor(ms / 864e5);
+    if(dias >= 1) return `hace ${dias} día${dias === 1 ? "" : "s"}`;
+    const horas = Math.floor(ms / 36e5);
+    if(horas >= 1) return `hace ${horas} hora${horas === 1 ? "" : "s"}`;
+    const min = Math.max(1, Math.floor(ms / 6e4));
+    return `hace ${min} minuto${min === 1 ? "" : "s"}`;
+}
+
+// ISO -> valor para <input type="datetime-local"> ("2026-06-19T14:30")
+function toLocalInput(iso){
+    if(!iso) return "";
+    const d = new Date(iso);
+    if(isNaN(d)) return "";
+    const p = n => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+// Formulario de datos editables de la incidencia
+function camposFormulario(t){
+    return `
+        <div class="form-grid">
+            <label class="fld"><span>Empresa</span>
+                <input id="f_empresa" value="${escapeHtml(t.empresa)}"></label>
+            <label class="fld"><span>Localización</span>
+                <input id="f_localizacion" value="${escapeHtml(t.localizacion)}"></label>
+            <label class="fld"><span>Teléfono de contacto</span>
+                <input id="f_telefono" value="${escapeHtml(t.telefono)}"></label>
+            <label class="fld"><span>Hora de llegada (automática, desde Outlook)</span>
+                <input type="text" value="${t.hora_llegada ? formatFecha(t.hora_llegada) : '—'}" disabled title="Es la hora real en que llegó el correo. Marca la prioridad."></label>
+            <label class="fld"><span>Hora de cierre (automática al cerrar)</span>
+                <input type="text" value="${t.hora_cierre ? formatFecha(t.hora_cierre) : '—'}" disabled title="Se rellena sola al cerrar la incidencia."></label>
+            <label class="fld full"><span>Descripción breve (resumen que sale en la tarjeta)</span>
+                <input id="f_resumen" value="${escapeHtml(t.resumen || '')}" placeholder="Contexto en pocas palabras… Ej: 4 PDAs sin acceso, urgente"></label>
+            <label class="fld full"><span>Descripción (editable — no cambia el correo del hilo)</span>
+                <textarea id="f_descripcion" rows="3">${escapeHtml(t.descripcion)}</textarea></label>
+            <label class="fld full"><span>Solución (cómo se resolvió) — obligatoria para cerrar</span>
+                <textarea id="f_solucion" rows="3">${escapeHtml(t.solucion)}</textarea></label>
+        </div>`;
+}
+
+// Barra compacta de "Próximo paso" (se guarda sola al salir del campo)
+function panelCompletar(t){
+    return `
+        <div class="next-bar">
+            <span class="next-bar-label">Próximo paso</span>
+            <input id="f_proximo_paso" value="${escapeHtml(t.proximo_paso)}"
+                   placeholder="Ej: Llamar al cliente para confirmar el horario…">
+        </div>`;
+}
+
+// Guarda solo el próximo paso (al salir del campo) y refresca la lista
+async function guardarProximoPaso(id){
+    const val = _val("#f_proximo_paso");
+    try {
+        await fetch(`/api/v1/tickets/${encodeURIComponent(id)}`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ proximo_paso: val }),
+        });
+        const t = allTickets.find(x => x.ticket_id === id);
+        if(t) t.proximo_paso = val;
+        renderLista();
+    } catch(e){ /* silencioso */ }
+}
+
+// Adjuntos de un mensaje: imágenes como miniatura (clic = abrir grande), documentos como tarjeta
+function renderAdjuntos(adjuntos){
+    if(!adjuntos || !adjuntos.length) return "";
+    return `<div class="adjuntos">` + adjuntos.map(a => {
+        if(a.tipo === "imagen")
+            return `<a class="adj-img" href="${a.src}" target="_blank" title="${escapeHtml(a.nombre)}"><img src="${a.src}" alt=""></a>`;
+        if(a.tipo === "video")
+            return `<video class="adj-video" controls preload="metadata" title="${escapeHtml(a.nombre)}"
+                        style="max-width:100%;width:320px;border-radius:8px;background:#000;">
+                        <source src="${a.src}">
+                        Tu navegador no puede reproducir este vídeo. <a href="${a.src}">Descargar</a>
+                    </video>`;
+        return `<a class="adj-doc" href="${a.src}" title="Descargar ${escapeHtml(a.nombre)}">
+                    <span class="adj-ico">📄</span>
+                    <span class="adj-info"><span class="adj-nombre">${escapeHtml(a.nombre)}</span>
+                    <span class="adj-size">${escapeHtml(a.tamano)}</span></span>
+                </a>`;
+    }).join("") + `</div>`;
+}
+
+// Copia un texto al portapapeles con feedback en el botón
+async function copiarTexto(texto, btn){
+    const ok = () => { if(btn){ const t = btn.textContent; btn.textContent = "¡Copiado!"; btn.classList.add("copiado"); setTimeout(()=>{ btn.textContent=t; btn.classList.remove("copiado"); }, 1500); } };
+    try { await navigator.clipboard.writeText(texto || ""); ok(); }
+    catch(e){
+        const ta = document.createElement("textarea"); ta.value = texto || ""; ta.style.position="fixed"; ta.style.opacity="0";
+        document.body.appendChild(ta); ta.select();
+        try { document.execCommand("copy"); ok(); } catch(_){}
+        document.body.removeChild(ta);
+    }
+}
+
+// Sugerencias de la Biblioteca parecidas a esta incidencia
+async function cargarSugerencias(ticketId){
+    const cont = $("#sugerencias");
+    if(!cont) return;
+    try {
+        const d = await (await fetch(`/api/v1/tickets/${encodeURIComponent(ticketId)}/sugerencias`)).json();
+        const sug = d.sugerencias || [];
+        if(!sug.length){ cont.innerHTML = ""; return; }
+        cont.innerHTML = `
+            <details class="form-card sug-card">
+                <summary>Soluciones sugeridas de la Biblioteca (${sug.length})</summary>
+                <div class="sug-body">
+                ${sug.map((s, i) => `
+                    <div class="sug-item">
+                        <div class="sug-q">${escapeHtml(s.pregunta)}${s.tema ? ` <span class="sug-tema">${escapeHtml(s.tema)}</span>` : ""}</div>
+                        <div class="sug-r">${escapeHtml(s.respuesta) || "Sin respuesta."}</div>
+                        <div class="sug-acc">
+                            <button class="btn-light" data-sugcopiar="${i}">Copiar respuesta</button>
+                            <a class="sug-link" href="/biblioteca" data-sugver="${s.id}">Ver en Biblioteca</a>
+                        </div>
+                    </div>`).join("")}
+                </div>
+            </details>`;
+        $$("[data-sugcopiar]", cont).forEach(b =>
+            b.addEventListener("click", () => copiarTexto(sug[parseInt(b.dataset.sugcopiar,10)].respuesta, b)));
+        $$("[data-sugver]", cont).forEach(a => a.setAttribute("href", "/biblioteca"));
+    } catch(e){ cont.innerHTML = ""; }
+}
+
+function renderReader(t){
+    const cont = $("#readerContent");
+    const esNueva = t.estado === "PROCESADO";
+
+    // El primer correo del hilo es el ORIGINAL inmutable (no cambia al editar la descripción)
+    const cuerpoInicial = t.cuerpo_inicial != null ? t.cuerpo_inicial : t.descripcion;
+    const mensajeInicial = `
+        <div class="bubble initial">
+            <div class="sender">Mensaje recibido</div>
+            <div class="text">${escapeHtml(cuerpoInicial) || "Sin contenido."}</div>
+            ${renderAdjuntos(t.adjuntos_inicial)}
+            <span class="stamp">${formatFecha(t.created_at)}</span>
+        </div>`;
+
+    // Línea compacta "Reenviado a: X" (en lugar de todo el hilo citado)
+    const reenviadoHtml = r => r
+        ? `<div class="reenviado" style="margin-top:6px;font-size:12px;font-style:italic;opacity:.85;">↪ Reenviado a: ${escapeHtml(r)}</div>`
+        : "";
+
+    // Más recientes ARRIBA: invertimos el orden de los mensajes.
+    const mensajes = (t.mensajes || []).slice().reverse().map(m => `
+        <div class="bubble ${/sistema|software|stcretail/i.test(m.remitente||"") ? "system" : ""}">
+            <div class="sender">${escapeHtml(m.remitente) || "—"}</div>
+            ${m.contenido ? `<div class="text">${escapeHtml(m.contenido)}</div>` : ""}
+            ${reenviadoHtml(m.reenviado_a)}
+            ${renderAdjuntos(m.adjuntos)}
+            <span class="stamp">${formatFecha(m.fecha_envio)}</span>
+        </div>`).join("");
+    // El correo inicial (el más antiguo) va al final del todo
+    const hilo = mensajes + mensajeInicial;
+
+    const completar = panelCompletar(t);
+    const hayHilo = (t.mensajes || []).length > 0;
+    const tituloChat = hayHilo ? "Conversación (hilo de correos)" : "Mensaje recibido";
+
+    const head = `
+        <div class="reader-head">
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:12px;">
+                <h1>${escapeHtml(t.empresa) || "(sin empresa)"}</h1>
+                <span class="badge ${t.estado}">${ESTADO_NICE[t.estado] || t.estado}</span>
+            </div>
+            <div class="meta-row">
+                <span>ID: <b>${escapeHtml(t.ticket_id)}</b></span>
+                <span>Llegada: <b>${formatFecha(t.hora_llegada || t.created_at)}</b></span>
+                ${t.hora_cierre ? `<span>Cierre: ${formatFecha(t.hora_cierre)}</span>` : ""}
+            </div>
+        </div>`;
+
+    let cuerpo;
+    if(esNueva){
+        // NUEVA: aún no hay conversación → formulario grande + el mensaje recibido
+        cuerpo = `
+            <div class="reader-scroll">
+                <div class="form-card destacada">
+                    <h3>Completa la información de la incidencia</h3>
+                    <p class="form-hint">Es <b>nueva</b>. Rellena los datos y pásala a <b>En progreso</b>.</p>
+                    ${camposFormulario(t)}
+                    <div class="form-actions">
+                        <button class="btn-light" id="btnGuardar">Guardar</button>
+                        <button class="btn-primary" id="btnAvanzar">Guardar y pasar a En progreso</button>
+                    </div>
+                </div>
+                ${completar}
+                <div>
+                    <div class="bloque-titulo">${tituloChat}</div>
+                    <div class="chat" id="chat">${hilo}</div>
+                </div>
+                <div id="sugerencias"></div>
+            </div>`;
+    } else {
+        // EN PROGRESO / CERRADA: prioridad a la conversación; datos editables plegados
+        const acciones = t.estado === "EN_PROGRESO"
+            ? `<button class="btn-light" id="btnGuardar">Guardar cambios</button>
+               <button class="btn-primary" id="btnCerrar">Cerrar incidencia</button>`
+            : `<button class="btn-light" id="btnGuardar">Guardar cambios</button>
+               <button class="btn-light" id="btnReabrir">Reabrir (En progreso)</button>`;
+        cuerpo = `
+            <div class="reader-scroll">
+                <details class="form-card compacta">
+                    <summary>Datos de la incidencia (clic para editar)</summary>
+                    ${camposFormulario(t)}
+                    <div class="form-actions">${acciones}</div>
+                </details>
+                ${completar}
+                <div class="bloque-titulo">Conversación (hilo de correos)</div>
+                <div class="chat" id="chat">${hilo}</div>
+                <div id="sugerencias"></div>
+            </div>`;
+    }
+
+    cont.innerHTML = head + cuerpo;
+    cargarSugerencias(t.ticket_id);
+
+    const bind = (id, estado) => { const b = $("#"+id); if(b) b.addEventListener("click", () => guardarTicket(t.ticket_id, estado)); };
+    bind("btnGuardar", null);
+    bind("btnAvanzar", "EN_PROGRESO");
+    bind("btnCerrar", "CERRADO");
+    bind("btnReabrir", "EN_PROGRESO");
+    // El próximo paso se guarda solo al salir del campo (sin recargar el panel)
+    const pp = $("#f_proximo_paso");
+    if(pp) pp.addEventListener("change", () => guardarProximoPaso(t.ticket_id));
+
+    const chat = $("#chat", cont);
+    if(chat) chat.scrollTop = 0;   // lo más reciente está arriba
+}
+
+const _val = sel => { const el = $(sel); return el ? el.value : ""; };
+
+async function guardarTicket(id, nuevoEstado){
+    const payload = {
+        empresa: _val("#f_empresa"),
+        localizacion: _val("#f_localizacion"),
+        telefono: _val("#f_telefono"),
+        resumen: _val("#f_resumen"),
+        descripcion: _val("#f_descripcion"),
+        solucion: _val("#f_solucion"),
+        proximo_paso: _val("#f_proximo_paso"),
+        // hora de llegada y de cierre son automáticas: no se envían
+    };
+    if(nuevoEstado) payload.estado = nuevoEstado;
+
+    // Aviso amistoso antes de cerrar sin solución
+    if(nuevoEstado === "CERRADO" && !payload.solucion.trim()){
+        alert("Para cerrar la incidencia, escribe primero la solución (cómo se resolvió).");
+        const el = $("#f_solucion"); if(el) el.focus();
+        return;
+    }
+
+    try {
+        const r = await fetch(`/api/v1/tickets/${encodeURIComponent(id)}`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+        });
+        if(!r.ok){
+            const err = await r.json().catch(() => ({}));
+            throw new Error(err.detail || ("Error " + r.status));
+        }
+        await cargarTickets();   // refresca lista y contadores (el estado puede haber cambiado)
+        abrirTicket(id);         // recarga el panel con los datos guardados
+    } catch(e){
+        alert("No se pudo guardar: " + e.message);
+    }
+}
+
+/* ============================================================
+   Filtros, búsqueda y navegación
+   ============================================================ */
+$$(".folder[data-estado]").forEach(f => f.addEventListener("click", () => {
+    $$(".folder[data-estado]").forEach(x => x.classList.remove("active"));
+    f.classList.add("active");
+    filtroEstado = f.dataset.estado;
+    // La barra de rango temporal solo tiene sentido en Cerradas
+    $("#rangeBar").style.display = (filtroEstado === "CERRADO") ? "flex" : "none";
+    renderLista();
+}));
+
+// Botones de rango temporal (Semana / Mes / Año / Total)
+$$("#rangeBar .chip").forEach(c => c.addEventListener("click", () => {
+    $$("#rangeBar .chip").forEach(x => x.classList.remove("active"));
+    c.classList.add("active");
+    rangoCerradas = c.dataset.range;
+    renderLista();
+}));
+
+let searchTimer;
+$("#search").addEventListener("input", e => {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => { busqueda = e.target.value; renderLista(); }, 120);
+});
+
+$("#refresh").addEventListener("click", cargarTickets);
+
+/* Colapsar / expandir panel de carpetas */
+$("#toggleNav").addEventListener("click", () => {
+    const nav = $("#nav");
+    nav.classList.toggle("collapsed");
+    localStorage.setItem("navCollapsed", nav.classList.contains("collapsed") ? "1" : "0");
+});
+if(localStorage.getItem("navCollapsed") === "1") $("#nav").classList.add("collapsed");
+
+/* ============================================================
+   Divisores arrastrables (redimensionar paneles)
+   ============================================================ */
+function initSplitter(splitter){
+    const target = splitter.dataset.target; // "nav" o "list"
+    const el = target === "nav" ? $("#nav") : $("#listPane");
+    const min = target === "nav" ? 140 : 240;
+    const max = target === "nav" ? 420 : 700;
+
+    // Restaura tamaño guardado
+    const saved = localStorage.getItem("w_" + target);
+    if(saved){ el.style.flexBasis = Math.min(max, Math.max(min, parseInt(saved,10))) + "px"; }
+
+    let startX, startW;
+    function onMove(ev){
+        const w = Math.min(max, Math.max(min, startW + (ev.clientX - startX)));
+        el.style.flexBasis = w + "px";
+    }
+    function onUp(){
+        document.removeEventListener("mousemove", onMove);
+        document.removeEventListener("mouseup", onUp);
+        document.body.classList.remove("resizing");
+        splitter.classList.remove("dragging");
+        localStorage.setItem("w_" + target, parseInt(el.getBoundingClientRect().width,10));
+    }
+    splitter.addEventListener("mousedown", ev => {
+        // No redimensiones la nav si está colapsada
+        if(target === "nav" && $("#nav").classList.contains("collapsed")) return;
+        ev.preventDefault();
+        startX = ev.clientX;
+        startW = el.getBoundingClientRect().width;
+        document.body.classList.add("resizing");
+        splitter.classList.add("dragging");
+        document.addEventListener("mousemove", onMove);
+        document.addEventListener("mouseup", onUp);
+    });
+    // Doble clic = restablecer
+    splitter.addEventListener("dblclick", () => {
+        el.style.flexBasis = "";
+        localStorage.removeItem("w_" + target);
+    });
+}
+$$(".splitter").forEach(initSplitter);
+
+/* ============================================================
+   Exportar a Excel (modal con selección de columnas)
+   ============================================================ */
+const COLS_POR_DEFECTO = ["created_at","empresa","localizacion","descripcion","estado","conversacion","correo"];
+let columnasExport = [];
+
+async function cargarColumnasExport(){
+    if(columnasExport.length) return;
+    try {
+        const r = await fetch("/api/v1/export/columns");
+        columnasExport = (await r.json()).columnas || [];
+    } catch(e){ columnasExport = []; }
+}
+
+// Recuerda las elecciones del export entre aperturas (en el navegador)
+function leerPrefsExport(){
+    try { return JSON.parse(localStorage.getItem("exportPrefs")) || {}; } catch(e){ return {}; }
+}
+function guardarPrefsExport(p){ localStorage.setItem("exportPrefs", JSON.stringify(p)); }
+
+function pintarColumnas(){
+    const prefs = leerPrefsExport();
+    // Si hay columnas guardadas, usarlas; si no, las de por defecto
+    const marcadas = Array.isArray(prefs.columns) ? prefs.columns : COLS_POR_DEFECTO;
+    $("#colList").innerHTML = columnasExport.map(c => `
+        <label class="col-item">
+            <input type="checkbox" value="${c.key}" ${marcadas.includes(c.key) ? "checked" : ""}>
+            <span>${escapeHtml(c.label)}</span>
+        </label>
+    `).join("");
+}
+
+function pintarMarcas(){
+    const marcas = [...new Set(allTickets.map(t => (t.empresa||"").trim()).filter(Boolean))].sort();
+    const sel = $("#expMarca");
+    sel.innerHTML = '<option value="TODAS">Todas las marcas</option>' +
+        marcas.map(m => `<option value="${escapeHtml(m)}">${escapeHtml(m)}</option>`).join("");
+}
+
+async function abrirExport(){
+    await cargarColumnasExport();
+    pintarColumnas();
+    pintarMarcas();
+    const prefs = leerPrefsExport();
+    // Estado y marca: lo guardado la última vez; si no hay, la carpeta actual / Todas
+    $("#expEstado").value = prefs.estado || filtroEstado || "TODOS";
+    const sel = $("#expMarca");
+    sel.value = (prefs.marca && [...sel.options].some(o => o.value === prefs.marca)) ? prefs.marca : "TODAS";
+    $("#modalExport").style.display = "flex";
+}
+function cerrarExport(){ $("#modalExport").style.display = "none"; }
+
+function descargarExcel(){
+    const seleccionadas = $$("#colList input:checked").map(i => i.value);
+    if(seleccionadas.length === 0){ alert("Selecciona al menos una columna."); return; }
+    const estado = $("#expEstado").value;
+    const marca = $("#expMarca").value;
+    // Guarda las elecciones para la próxima vez
+    guardarPrefsExport({ columns: seleccionadas, estado, marca });
+    const params = new URLSearchParams();
+    params.set("columns", seleccionadas.join(","));
+    if(estado && estado !== "TODOS") params.set("estado", estado);
+    if(marca && marca !== "TODAS") params.set("empresa", marca);
+    // Descarga directa (el navegador abre el "Guardar como")
+    window.location.href = "/api/v1/export/excel?" + params.toString();
+    cerrarExport();
+}
+
+$("#exportar").addEventListener("click", abrirExport);
+$("#modalClose").addEventListener("click", cerrarExport);
+$("#modalCancel").addEventListener("click", cerrarExport);
+$("#modalDownload").addEventListener("click", descargarExcel);
+$("#modalExport").addEventListener("click", e => { if(e.target.id === "modalExport") cerrarExport(); });
+$("#colAll").addEventListener("click", () => $$("#colList input").forEach(i => i.checked = true));
+$("#colNone").addEventListener("click", () => $$("#colList input").forEach(i => i.checked = false));
+
+/* ---------- Eventos del modal de recordatorios ---------- */
+$("#recX").addEventListener("click", cerrarModalRec);
+$("#recCancelar").addEventListener("click", cerrarModalRec);
+$("#recGuardar").addEventListener("click", guardarRec);
+$("#modalRec").addEventListener("click", e => { if(e.target.id === "modalRec") cerrarModalRec(); });
+
+/* ---------- Temas de la Biblioteca en la nav (clic = ir a ese tema) ---------- */
+async function cargarTemasNav(){
+    try {
+        const data = await (await fetch("/api/v1/carpetas", {cache:"no-store"})).json();
+        const cont = $("#temasNav");
+        if(!cont) return;
+        cont.innerHTML = (data.carpetas || []).map(t => `
+            <a class="folder tema-sub" href="/biblioteca?tema=${t.id}">
+                <span class="f-dot kb"></span><span class="f-name">${escapeHtml(t.nombre)}</span>
+                <span class="count">${t.num}</span>
+            </a>`).join("");
+    } catch(e){ /* silencioso */ }
+}
+
+/* ---------- Arranque ---------- */
+// Si venimos de la Biblioteca con /?estado=XXX, abrir esa carpeta directamente
+const _est = new URLSearchParams(location.search).get("estado");
+if(_est && ESTADO_LABEL[_est]){
+    filtroEstado = _est;
+    $$(".folder[data-estado]").forEach(x => x.classList.toggle("active", x.dataset.estado === _est));
+    $("#rangeBar").style.display = (_est === "CERRADO") ? "flex" : "none";
+}
+cargarTickets();
+cargarTemasNav();
+cargarRecordatorios();
+</script>
+</body>
+</html>

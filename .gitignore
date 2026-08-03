@@ -3,3 +3,6 @@ __pycache__/
 .venv/
 venv/
 .env
+o365_token.txt
+biblioteca_files/
+adjuntos_files/

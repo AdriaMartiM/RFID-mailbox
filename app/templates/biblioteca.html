@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Biblioteca</title>
+    <link rel="stylesheet" href="/static/css/style.css?v=20260626e">
+</head>
+<body>
+<div class="app">
+
+    <header class="topbar">
+        <a class="btn" href="/">&larr; Incidencias</a>
+        <div class="brand">Biblioteca</div>
+        <div class="search">
+            <input type="text" id="search" placeholder="Buscar pregunta o respuesta…" autocomplete="off">
+        </div>
+        <div class="spacer"></div>
+        <button class="btn" id="nuevaPregunta">+ Nueva pregunta</button>
+    </header>
+
+    <div class="body">
+        <!-- Panel izquierdo: navegación (igual que en incidencias) + temas -->
+        <aside class="nav" id="nav" style="flex:0 0 220px;">
+            <div class="nav-header">Incidencias</div>
+            <a class="folder" href="/?estado=TODOS"><span class="f-dot all"></span><span class="f-name">Todas</span></a>
+            <a class="folder" href="/?estado=PROCESADO"><span class="f-dot PROCESADO"></span><span class="f-name">Nuevas</span></a>
+            <a class="folder" href="/?estado=EN_PROGRESO"><span class="f-dot EN_PROGRESO"></span><span class="f-name">En progreso</span></a>
+            <a class="folder" href="/?estado=CERRADO"><span class="f-dot CERRADO"></span><span class="f-name">Cerradas</span></a>
+            <a class="folder folder-link" href="/kpis"><span class="f-dot" style="background:#2a9d5c;"></span><span class="f-name">Panel de KPIs</span></a>
+            <div class="nav-sep"></div>
+            <div class="nav-header">Biblioteca · Temas</div>
+            <div id="temas"></div>
+            <div class="folder folder-link" id="nuevoTema"><span class="f-name">+ Nuevo tema</span></div>
+        </aside>
+
+        <!-- Lista FAQ -->
+        <div class="faq-wrap" id="faqWrap"><div class="list-msg">Cargando…</div></div>
+    </div>
+</div>
+
+<!-- Modal de edición / creación -->
+<div class="modal-overlay" id="modal" style="display:none;">
+    <div class="modal" style="width:600px;">
+        <div class="modal-head"><span id="modalTitulo">Nueva pregunta</span><button class="modal-x" id="modalX">&times;</button></div>
+        <div class="modal-body">
+            <div class="form-grid">
+                <label class="fld full"><span>Pregunta</span>
+                    <textarea id="f_titulo" rows="2" placeholder="Ej: ¿Cómo cambio el rollo de la impresora?"></textarea></label>
+                <label class="fld"><span>Tema</span><select id="f_tema"></select></label>
+                <label class="fld"><span>Etiquetas (comas)</span>
+                    <input id="f_etiquetas" placeholder="impresora, rollo"></label>
+                <label class="fld full"><span>Respuesta</span>
+                    <textarea id="f_contenido" rows="8" placeholder="Explica la solución paso a paso…"></textarea></label>
+            </div>
+            <div id="modalMedia"></div>
+        </div>
+        <div class="modal-foot">
+            <button class="btn-light" id="modalCancelar">Cancelar</button>
+            <button class="btn-primary" id="modalGuardar">Guardar</button>
+        </div>
+    </div>
+</div>
+
+<script>
+const $ = (s, c=document) => c.querySelector(s);
+const $$ = (s, c=document) => Array.from(c.querySelectorAll(s));
+const _val = sel => { const el = $(sel); return el ? el.value : ""; };
+
+let temas = [];
+let preguntas = [];
+let temaActual = "TODO";
+let busqueda = "";
+let infoTemas = { sin_carpeta: 0, total: 0 };
+let abiertas = new Set();      // ids de FAQ desplegadas
+let detalle = {};              // cache de detalle (con media) por id
+let editId = null;             // id en edición, o null (nueva)
+
+function escapeHtml(s){
+    return String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+function youtubeEmbed(u){
+    const m = (u||"").match(/(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([\w-]{11})/);
+    return m ? `https://www.youtube.com/embed/${m[1]}` : null;
+}
+
+/* ---------- Carga ---------- */
+async function cargar(){
+    const data = await (await fetch("/api/v1/carpetas", {cache:"no-store"})).json();
+    temas = data.carpetas || []; infoTemas = data;
+    preguntas = (await (await fetch("/api/v1/biblioteca", {cache:"no-store"})).json()).items || [];
+    // Si venimos de un enlace ?tema=ID, abrir filtrado por ese tema
+    const t = new URLSearchParams(location.search).get("tema");
+    if(t && temas.some(x => x.id === parseInt(t,10))) temaActual = parseInt(t,10);
+    renderTemasNav(); renderFaq();
+}
+
+/* ---------- Temas (panel izquierdo) ---------- */
+function renderTemasNav(){
+    const item = (val, txt, num, t) => `
+        <div class="folder ${temaActual===val?"active":""}" data-t="${val}">
+            <span class="f-dot ${val==='TODO'?'all':val==='SIN'?'':'kb'}" ${val==='SIN'?'style="background:var(--text-faint);"':''}></span>
+            <span class="f-name">${escapeHtml(txt)}</span><span class="count">${num}</span>
+            ${t ? `<span class="carpeta-acc" data-ren="${t.id}" title="Renombrar">✎</span><span class="carpeta-acc" data-del="${t.id}" title="Eliminar">✕</span>` : ""}
+        </div>`;
+    $("#temas").innerHTML =
+        item("TODO","Todas",infoTemas.total||0,null) +
+        temas.map(t => item(t.id,t.nombre,t.num,t)).join("") +
+        item("SIN","Sin tema",infoTemas.sin_carpeta||0,null);
+    $$("#temas .folder").forEach(el => el.addEventListener("click", e => {
+        if(e.target.dataset.ren){ renombrarTema(parseInt(e.target.dataset.ren,10)); return; }
+        if(e.target.dataset.del){ borrarTema(parseInt(e.target.dataset.del,10)); return; }
+        const t = el.dataset.t;
+        temaActual = (t==="TODO"||t==="SIN") ? t : parseInt(t,10);
+        renderTemasNav(); renderFaq();
+    }));
+}
+async function nuevoTema(){
+    const nombre = prompt("Nombre del tema (ej: Impresoras RFID, PDA…):");
+    if(!nombre || !nombre.trim()) return;
+    await fetch("/api/v1/carpetas",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({nombre:nombre.trim()})});
+    await cargar();
+}
+async function renombrarTema(id){
+    const t = temas.find(x=>x.id===id);
+    const nombre = prompt("Nuevo nombre:", t?t.nombre:"");
+    if(!nombre || !nombre.trim()) return;
+    await fetch(`/api/v1/carpetas/${id}`,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({nombre:nombre.trim()})});
+    await cargar();
+}
+async function borrarTema(id){
+    if(!confirm("¿Eliminar el tema? Sus preguntas pasarán a «Sin tema».")) return;
+    await fetch(`/api/v1/carpetas/${id}`,{method:"DELETE"});
+    if(temaActual===id) temaActual="TODO";
+    await cargar();
+}
+
+/* ---------- Lista FAQ ---------- */
+function visibles(){
+    let v = preguntas;
+    if(temaActual==="SIN") v = v.filter(p => !p.carpeta_id);
+    else if(temaActual!=="TODO") v = v.filter(p => p.carpeta_id === temaActual);
+    const q = busqueda.trim().toLowerCase();
+    if(q) v = v.filter(p => [p.titulo,p.contenido,p.etiquetas].some(x => (x||"").toLowerCase().includes(q)));
+    return v;
+}
+function nombreTema(id){ return (temas.find(t=>t.id===id)||{}).nombre || ""; }
+
+function renderFaq(){
+    const v = visibles();
+    if(v.length === 0){
+        $("#faqWrap").innerHTML = '<div class="list-msg">No hay preguntas aquí. Crea una con «+ Nueva pregunta».</div>';
+        return;
+    }
+    $("#faqWrap").innerHTML = v.map(p => {
+        const ab = abiertas.has(p.id);
+        const tema = nombreTema(p.carpeta_id);
+        return `
+        <div class="faq ${ab?"abierta":""}" data-id="${p.id}">
+            <div class="faq-q" draggable="true">
+                <span class="faq-drag" title="Arrastrar para ordenar">⠿</span>
+                <span class="faq-arrow">▸</span>
+                <span class="faq-titulo">${escapeHtml(p.titulo) || "(sin pregunta)"}</span>
+                ${p.num_media ? `<span class="faq-media">📎 ${p.num_media}</span>` : ""}
+                ${tema ? `<span class="faq-tema">${escapeHtml(tema)}</span>` : ""}
+            </div>
+            <div class="faq-a" ${ab?"":'style="display:none;"'}>${ab ? cuerpoFaq(p.id) : ""}</div>
+        </div>`;
+    }).join("");
+    $$("#faqWrap .faq-q").forEach(el => el.addEventListener("click", () => toggle(parseInt(el.closest(".faq").dataset.id,10))));
+    activarArrastre();
+    enlazarCuerpos();
+}
+
+/* ---------- Ordenar arrastrando ---------- */
+let faqArrastrada = null;
+function activarArrastre(){
+    $$("#faqWrap .faq-q").forEach(q => {
+        const faq = q.closest(".faq");
+        q.addEventListener("dragstart", e => { faqArrastrada = faq; faq.classList.add("arrastrando"); e.dataTransfer.effectAllowed = "move"; });
+        q.addEventListener("dragend", () => { faq.classList.remove("arrastrando"); guardarOrden(); });
+    });
+    $$("#faqWrap .faq").forEach(faq => {
+        faq.addEventListener("dragover", e => {
+            e.preventDefault();
+            if(!faqArrastrada || faqArrastrada === faq) return;
+            const r = faq.getBoundingClientRect();
+            const despues = e.clientY > r.top + r.height / 2;
+            faq.parentNode.insertBefore(faqArrastrada, despues ? faq.nextSibling : faq);
+        });
+    });
+}
+async function guardarOrden(){
+    const ids = $$("#faqWrap .faq").map(f => parseInt(f.dataset.id, 10));
+    if(!ids.length) return;
+    try {
+        await fetch("/api/v1/biblioteca/orden", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ ids }) });
+        await cargar();   // recarga ya ordenado (mantiene las preguntas abiertas)
+    } catch(e){ /* silencioso */ }
+}
+
+function cuerpoFaq(id){
+    const d = detalle[id];
+    if(!d) return '<div class="list-msg">Cargando…</div>';
+    return `
+        <div class="qa-respuesta">${escapeHtml(d.contenido) || "<i>Sin respuesta todavía.</i>"}</div>
+        ${d.media && d.media.length ? `<div class="bloque-titulo" style="margin-top:16px;">Fotos, vídeos y documentos</div>${galeria(d.media)}` : ""}
+        <div class="faq-acc">
+            <button class="btn-primary" data-copiar="${id}">Copiar respuesta</button>
+            <button class="btn-light" data-editar="${id}">Editar</button>
+            <button class="btn-light" data-borrar="${id}">Eliminar</button>
+        </div>`;
+}
+
+async function copiarRespuesta(id){
+    const d = detalle[id]; if(!d) return;
+    const texto = d.contenido || "";
+    const btn = document.querySelector(`[data-copiar="${id}"]`);
+    const ok = () => { if(btn){ const t = btn.textContent; btn.textContent = "¡Copiado!"; btn.classList.add("copiado"); setTimeout(()=>{ btn.textContent=t; btn.classList.remove("copiado"); }, 1500); } };
+    try {
+        await navigator.clipboard.writeText(texto);
+        ok();
+    } catch(e){
+        // Reserva por si el navegador no permite el portapapeles directo
+        const ta = document.createElement("textarea");
+        ta.value = texto; ta.style.position = "fixed"; ta.style.opacity = "0";
+        document.body.appendChild(ta); ta.select();
+        try { document.execCommand("copy"); ok(); } catch(_){ alert("No se pudo copiar."); }
+        document.body.removeChild(ta);
+    }
+}
+function extDe(nombre){ const m = (nombre||"").match(/\.([a-z0-9]+)$/i); return m ? m[1].toUpperCase() : "DOC"; }
+function claseDoc(ext){
+    if(["XLS","XLSX","CSV"].includes(ext)) return "excel";
+    if(["DOC","DOCX","RTF","ODT"].includes(ext)) return "word";
+    if(ext==="PDF") return "pdf";
+    if(["PPT","PPTX"].includes(ext)) return "ppt";
+    if(["ZIP","RAR","7Z"].includes(ext)) return "zip";
+    return "gen";
+}
+function docCard(m){
+    const ext = extDe(m.nombre);
+    return `<a class="doc-card" href="${m.src}" target="_blank" title="${escapeHtml(m.nombre)}">
+        <span class="doc-ext ${claseDoc(ext)}">${ext}</span>
+        <span class="doc-info"><span class="doc-name">${escapeHtml(m.nombre)}</span><span class="doc-open">Abrir / descargar</span></span>
+    </a>`;
+}
+function galeria(media){
+    return `<div class="media-grid">` + media.map(m => {
+        if(m.tipo==="imagen") return `<a class="media-item" href="${m.src}" target="_blank"><img src="${m.src}" alt=""></a>`;
+        if(m.tipo==="video") return `<div class="media-item"><video src="${m.src}" controls></video></div>`;
+        if(m.tipo==="documento") return `<div class="media-item doc">${docCard(m)}</div>`;
+        const emb = youtubeEmbed(m.url);
+        return `<div class="media-item">${emb?`<iframe src="${emb}" allowfullscreen frameborder="0"></iframe>`:`<a class="btn-light" href="${escapeHtml(m.url)}" target="_blank">▶ Ver vídeo</a>`}</div>`;
+    }).join("") + `</div>`;
+}
+function enlazarCuerpos(){
+    $$("#faqWrap [data-copiar]").forEach(b => b.addEventListener("click", () => copiarRespuesta(parseInt(b.dataset.copiar,10))));
+    $$("#faqWrap [data-editar]").forEach(b => b.addEventListener("click", () => abrirModal(parseInt(b.dataset.editar,10))));
+    $$("#faqWrap [data-borrar]").forEach(b => b.addEventListener("click", () => borrar(parseInt(b.dataset.borrar,10))));
+}
+
+async function toggle(id){
+    if(abiertas.has(id)){ abiertas.delete(id); renderFaq(); return; }
+    abiertas.add(id);
+    if(!detalle[id]){
+        try { detalle[id] = await (await fetch(`/api/v1/biblioteca/${id}`, {cache:"no-store"})).json(); }
+        catch(e){ detalle[id] = { contenido:"(error al cargar)", media:[] }; }
+    }
+    renderFaq();
+}
+
+/* ---------- Modal edición / creación ---------- */
+function opcionesTema(sel){
+    return ['<option value="0">— Sin tema —</option>',
+        ...temas.map(t => `<option value="${t.id}" ${t.id===sel?"selected":""}>${escapeHtml(t.nombre)}</option>`)].join("");
+}
+function abrirModal(id){
+    editId = id;
+    const p = id ? (detalle[id] || preguntas.find(x=>x.id===id)) : null;
+    const temaSel = p ? (p.carpeta_id||0) : (typeof temaActual==="number"?temaActual:0);
+    $("#modalTitulo").textContent = id ? "Editar pregunta" : "Nueva pregunta";
+    $("#f_titulo").value = p ? p.titulo : "";
+    $("#f_tema").innerHTML = opcionesTema(temaSel);
+    $("#f_etiquetas").value = p ? (p.etiquetas||"") : "";
+    $("#f_contenido").value = p ? (p.contenido||"") : "";
+    $("#modalMedia").innerHTML = id ? seccionMedia(p) : '<p class="form-hint" style="margin-top:12px;">Guarda la pregunta y luego podrás añadir fotos y vídeos (con «Editar»).</p>';
+    if(id) enlazarMedia(id);
+    $("#modal").style.display = "flex";
+    $("#f_titulo").focus();
+}
+function seccionMedia(p){
+    return `<div class="bloque-titulo" style="margin-top:14px;">Fotos, vídeos y documentos</div>
+        <div id="dropZone" class="drop-zone">
+            <b>Arrastra aquí</b> fotos, vídeos o documentos (Excel, Word, PDF…), o <b>pega con Ctrl+V</b><br>
+            <span class="drop-sub">— o si prefieres —</span>
+        </div>
+        <div class="media-acciones">
+            <button class="btn-light" id="btnFoto">Elegir archivo…</button>
+            <button class="btn-light" id="btnVideoUrl">+ Vídeo por enlace</button>
+            <input type="file" id="mediaInput" accept=".jpg,.jpeg,.png,.gif,.webp,.bmp,.mp4,.webm,.mov,.m4v,.avi,.pdf,.doc,.docx,.xls,.xlsx,.csv,.ppt,.pptx,.txt,.zip,.rar" multiple style="display:none;">
+        </div>
+        <div id="mediaCont">${(p.media&&p.media.length)?galeriaEdit(p.media):'<p class="form-hint">Sin archivos todavía.</p>'}</div>`;
+}
+function galeriaEdit(media){
+    return `<div class="media-grid">` + media.map(m => {
+        let el, clase = "media-item";
+        if(m.tipo==="imagen") el = `<img src="${m.src}" alt="">`;
+        else if(m.tipo==="video") el = `<video src="${m.src}" controls></video>`;
+        else if(m.tipo==="documento"){ el = docCard(m); clase = "media-item doc"; }
+        else { const emb=youtubeEmbed(m.url); el = emb?`<iframe src="${emb}" allowfullscreen frameborder="0"></iframe>`:`<a class="btn-light" href="${escapeHtml(m.url)}" target="_blank">▶ Ver vídeo</a>`; }
+        return `<div class="${clase}">${el}<button class="media-del" data-m="${m.id}">Quitar</button></div>`;
+    }).join("") + `</div>`;
+}
+function enlazarMedia(id){
+    $("#btnFoto").addEventListener("click", () => $("#mediaInput").click());
+    $("#mediaInput").addEventListener("change", e => { subirArchivos(id, e.target.files); e.target.value = ""; });
+    $("#btnVideoUrl").addEventListener("click", () => videoUrl(id));
+    $$("#mediaCont .media-del").forEach(b => b.addEventListener("click", () => borrarMedia(id, parseInt(b.dataset.m,10))));
+    // Arrastrar y soltar archivos sobre la zona
+    const dz = $("#dropZone");
+    if(dz){
+        ["dragenter","dragover"].forEach(ev => dz.addEventListener(ev, e => { e.preventDefault(); e.stopPropagation(); dz.classList.add("over"); }));
+        ["dragleave","dragend"].forEach(ev => dz.addEventListener(ev, e => { e.preventDefault(); e.stopPropagation(); dz.classList.remove("over"); }));
+        dz.addEventListener("drop", e => { e.preventDefault(); e.stopPropagation(); dz.classList.remove("over"); subirArchivos(id, e.dataTransfer.files); });
+    }
+}
+function cerrarModal(){ $("#modal").style.display = "none"; editId = null; }
+
+async function guardarModal(){
+    const payload = {
+        titulo: _val("#f_titulo"),
+        carpeta_id: parseInt(_val("#f_tema")||"0",10),
+        etiquetas: _val("#f_etiquetas"),
+        contenido: _val("#f_contenido"),
+    };
+    if(!payload.titulo.trim()){ alert("Escribe la pregunta."); $("#f_titulo").focus(); return; }
+    try {
+        const nueva = !editId;
+        const url = nueva ? "/api/v1/biblioteca" : `/api/v1/biblioteca/${editId}`;
+        const r = await fetch(url, {method:nueva?"POST":"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});
+        if(!r.ok){ const e = await r.json().catch(()=>({})); throw new Error(e.detail||r.status); }
+        const g = await r.json();
+        detalle[g.id] = g;
+        abiertas.add(g.id);
+        cerrarModal();
+        await cargar();
+    } catch(e){ alert("No se pudo guardar: " + e.message); }
+}
+async function borrar(id){
+    if(!confirm("¿Eliminar esta pregunta y sus fotos/vídeos?")) return;
+    await fetch(`/api/v1/biblioteca/${id}`, {method:"DELETE"});
+    abiertas.delete(id); delete detalle[id];
+    await cargar();
+}
+
+/* ---------- Media (dentro del modal) ---------- */
+async function refrescarMedia(id){
+    detalle[id] = await (await fetch(`/api/v1/biblioteca/${id}`, {cache:"no-store"})).json();
+    $("#mediaCont").innerHTML = (detalle[id].media.length)?galeriaEdit(detalle[id].media):'<p class="form-hint">Sin archivos todavía.</p>';
+    $$("#mediaCont .media-del").forEach(b => b.addEventListener("click", () => borrarMedia(id, parseInt(b.dataset.m,10))));
+    // refrescar contador en la lista
+    const p = preguntas.find(x=>x.id===id); if(p) p.num_media = detalle[id].media.length;
+    renderFaq();
+}
+async function subirArchivos(id, lista){
+    const files = Array.from(lista || []);
+    if(!files.length) return;
+    const dz = $("#dropZone"); const txt = dz ? dz.innerHTML : "";
+    if(dz){ dz.classList.add("subiendo"); dz.innerHTML = "Subiendo…"; }
+    for(const file of files){
+        const fd = new FormData(); fd.append("file", file);
+        try { const r = await fetch(`/api/v1/biblioteca/${id}/media`, {method:"POST",body:fd}); if(!r.ok) throw new Error(r.status); }
+        catch(err){ alert("No se pudo subir: " + (file.name || "archivo")); }
+    }
+    if(dz){ dz.classList.remove("subiendo"); dz.innerHTML = txt; }
+    await refrescarMedia(id);
+}
+async function videoUrl(id){
+    const url = prompt("Pega el enlace del vídeo (YouTube u otro):");
+    if(!url || !url.trim()) return;
+    await fetch(`/api/v1/biblioteca/${id}/media/url`, {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url:url.trim()})});
+    await refrescarMedia(id);
+}
+async function borrarMedia(id, mid){
+    if(!confirm("¿Quitar este archivo?")) return;
+    await fetch(`/api/v1/media/${mid}`, {method:"DELETE"});
+    await refrescarMedia(id);
+}
+
+/* ---------- Eventos ---------- */
+$("#nuevaPregunta").addEventListener("click", () => abrirModal(null));
+$("#nuevoTema").addEventListener("click", nuevoTema);
+$("#modalX").addEventListener("click", cerrarModal);
+$("#modalCancelar").addEventListener("click", cerrarModal);
+$("#modalGuardar").addEventListener("click", guardarModal);
+$("#modal").addEventListener("click", e => { if(e.target.id==="modal") cerrarModal(); });
+let st;
+$("#search").addEventListener("input", e => { clearTimeout(st); st = setTimeout(() => { busqueda = e.target.value; renderFaq(); }, 120); });
+
+// Pegar imagen con Ctrl+V mientras se edita una pregunta (sin abrir el explorador)
+document.addEventListener("paste", e => {
+    if(editId === null || $("#modal").style.display === "none") return;
+    const items = Array.from((e.clipboardData || {}).items || []);
+    const imgs = items.filter(it => it.kind === "file" && it.type.startsWith("image/")).map(it => it.getAsFile()).filter(Boolean);
+    if(imgs.length){ e.preventDefault(); subirArchivos(editId, imgs); }
+});
+
+cargar();
+</script>
+</body>
+</html>

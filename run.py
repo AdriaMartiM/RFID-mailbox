@@ -1,6 +1,14 @@
+import sys
 import uvicorn
 
-print("🚀 Arrancando servidor...")
+# Permite imprimir emojis en la consola de Windows (evita UnicodeEncodeError)
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
+except Exception:
+    pass
+
+print("Arrancando servidor...")
 
 if __name__ == "__main__":
     uvicorn.run(

@@ -2,45 +2,52 @@
 <html lang="es">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Ticket {{ ticket.ticket_id }}</title>
-    <link rel="stylesheet" href="/static/css/style.css"> <style>
-        body { font-family: Arial, sans-serif; background: #f4f6f9; margin: 20px; }
-        .card { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); margin-bottom: 20px; }
-        .chat-box { background: #e5ddd5; padding: 20px; border-radius: 8px; max-width: 600px; }
-        .message { background: white; padding: 10px 15px; border-radius: 8px; margin-bottom: 10px; max-width: 80%; }
-        .message.system { background: #dcf8c6; margin-left: auto; } /* Mensajes tuyos/sistema */
-        .meta { font-size: 0.8em; color: #666; margin-top: 5px; display: block; }
+    <link rel="stylesheet" href="/static/css/style.css?v=20260626e">
+    <style>
+        body { overflow: auto; background: var(--bg); }
+        .wrap { max-width: 760px; margin: 0 auto; padding: 24px 20px; }
+        .back { display:inline-flex; align-items:center; gap:6px; color:var(--accent); text-decoration:none; margin-bottom:16px; font-weight:500; }
+        .back:hover { text-decoration:underline; }
+        .card { background:var(--bg-pane); border:1px solid var(--border); border-radius:8px; padding:20px 24px; box-shadow:var(--shadow); margin-bottom:18px; }
+        .card h1 { margin:0 0 12px; font-size:22px; }
+        .card .row { display:flex; flex-wrap:wrap; gap:16px; color:var(--text-soft); font-size:14px; }
+        .card .row b { color:var(--text); }
     </style>
 </head>
 <body>
+<div class="wrap">
+    <a class="back" href="/">&larr; Volver al panel</a>
 
     <div class="card">
-        <h1>🎟️ Ticket: {{ ticket.ticket_id }}</h1>
-        <p><strong>Empresa:</strong> {{ ticket.empresa }}</p>
-        <p><strong>Ubicación:</strong> {{ ticket.localizacion }}</p>
-        <p><strong>Teléfono:</strong> {{ ticket.telefono }}</p>
-        <p><strong>Estado del sistema:</strong> <span style="color: green;">{{ ticket.estado }}</span></p>
+        <div style="display:flex; align-items:center; justify-content:space-between; gap:12px;">
+            <h1>{{ ticket.empresa }}</h1>
+            <span class="badge {{ ticket.estado }}">{{ ticket.estado }}</span>
+        </div>
+        <div class="row">
+            <span>ID: <b>{{ ticket.ticket_id }}</b></span>
+            <span>Localización: <b>{{ ticket.localizacion }}</b></span>
+            <span>Teléfono: <b>{{ ticket.telefono }}</b></span>
+            <span>Fecha: {{ ticket.created_at.strftime('%d/%m/%Y %H:%M') }}</span>
+        </div>
     </div>
 
-    <h2>💬 Historial de la Conversación</h2>
-    <div class="chat-box">
-        
-        <div class="message">
-            <strong>Descripción Inicial:</strong>
-            <p>{{ ticket.descripcion }}</p>
-            <span class="meta">{{ ticket.created_at.strftime('%d/%m/%Y %H:%M') }}</span>
+    <div class="chat" style="padding:0; background:transparent;">
+        <div class="bubble initial">
+            <div class="sender">Descripción inicial</div>
+            <div class="text">{{ ticket.cuerpo_inicial or ticket.descripcion }}</div>
+            <span class="stamp">{{ ticket.created_at.strftime('%d/%m/%Y %H:%M') }}</span>
         </div>
 
         {% for msg in messages %}
-            <div class="message {% if 'tu_correo' in msg.remitente %}system{% endif %}">
-                <strong>{{ msg.remitente }}:</strong>
-                <p>{{ msg.contenido }}</p>
-                <span class="meta">{{ msg.fecha_envio.strftime('%d/%m/%Y %H:%M') }}</span>
+            <div class="bubble {% if 'sistema' in msg.remitente or 'software' in msg.remitente or 'stcretail' in msg.remitente %}system{% endif %}">
+                <div class="sender">{{ msg.remitente }}</div>
+                <div class="text">{{ msg.contenido }}</div>
+                <span class="stamp">{{ msg.fecha_envio.strftime('%d/%m/%Y %H:%M') }}</span>
             </div>
         {% endfor %}
-
     </div>
-
-    <p><a href="/">⬅️ Volver al Dashboard</a></p>
+</div>
 </body>
 </html>
