@@ -100,8 +100,11 @@ class OutlookService:
         inbox = self.mailbox.inbox_folder()
         qb = inbox.new_query()
         flt = qb.greater_equal('receivedDateTime', self.fecha_corte)
+        # El tope debe ser holgado: con DIAS_HISTORICO alto (recuperar un parón)
+        # la bandeja puede traer bastantes más de 50 correos y, al pedir los más
+        # recientes primero, los más antiguos se quedarían fuera para siempre.
         return inbox.get_messages(
-            limit=50, query=flt, order_by="receivedDateTime desc",
+            limit=500, query=flt, order_by="receivedDateTime desc",
             download_attachments=False,
         )
 
