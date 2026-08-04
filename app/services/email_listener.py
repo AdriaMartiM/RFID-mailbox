@@ -1,6 +1,8 @@
 # app/services/email_listener.py
 import re
 import time
+from datetime import timedelta
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 from app.database import SessionLocal
 from app.services.outlook_service import OutlookService
@@ -30,6 +32,38 @@ def _recibido(msg):
     if r is not None and r.tzinfo is not None:
         r = r.astimezone().replace(tzinfo=None)
     return r
+
+
+# Margen de seguridad que restamos al último correo conocido. Absorbe los correos
+# que llegan desordenados y los pequeños desfases de reloj entre Outlook y el PC.
+# Pedir de más no duplica nada (el anti-duplicados va por conversation_id y por
+# el id de mensaje de Outlook), así que ser generoso sale gratis.
+MARGEN = timedelta(hours=2)
+
+
+def _fecha_corte(db: Session):
+    """Desde cuándo hay que pedir correos: justo después del último que ya tenemos
+    guardado (menos el margen). Así, si el programa ha estado parado un fin de
+    semana o tres semanas, al arrancar recupera solo ese hueco; y en marcha normal
+    la ventana es de un par de horas.
+
+    Devuelve None si la base de datos está vacía (primer uso): entonces manda la
+    fecha de arranque en frío de OutlookService (DIAS_HISTORICO)."""
+    # Correo inicial más reciente. created_at es la hora real de llegada del correo
+    # y NO se puede editar desde la web (a diferencia de hora_llegada).
+    ultimo_ticket = db.query(func.max(Ticket.created_at)).scalar()
+    # Respuesta más reciente traída de Outlook. Filtramos por outlook_message_id
+    # para no contar las notas escritas a mano en la web, que llevan la fecha de
+    # hoy y adelantarían el corte saltándose correos de verdad.
+    ultima_resp = (
+        db.query(func.max(Message.fecha_envio))
+        .filter(Message.outlook_message_id.isnot(None))
+        .scalar()
+    )
+    fechas = [f for f in (ultimo_ticket, ultima_resp) if f]
+    if not fechas:
+        return None
+    return max(fechas) - MARGEN
 
 
 def _sincronizar_hilo(db: Session, outlook: OutlookService, conv: str):
@@ -87,11 +121,21 @@ def start_email_listener():
         print(f"[ERROR] No se pudo conectar con la API de Outlook: {str(e)}")
         return
 
+    primera_vuelta = True
     while True:
         db: Session = SessionLocal()
         try:
+            # El corte se recalcula en CADA vuelta a partir de lo que ya tenemos
+            # guardado: si el programa ha estado parado, la primera vuelta cubre
+            # todo el hueco; después la ventana se queda en un par de horas.
+            corte = _fecha_corte(db)
+            if primera_vuelta:
+                desde = corte or outlook.fecha_corte
+                print(f"[INFO] Recuperando correos desde: {desde:%d/%m/%Y %H:%M}")
+                primera_vuelta = False
+
             # Miramos la bandeja para detectar QUÉ hilos tienen actividad reciente
-            nuevos = list(outlook.obtener_correos_nuevos())
+            nuevos = list(outlook.obtener_correos_nuevos(desde=corte))
             convs = []
             for msg in nuevos:
                 c = msg.conversation_id

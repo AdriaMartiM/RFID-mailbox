@@ -80,29 +80,40 @@ class OutlookService:
         )
         print(f"[INFO] Vigilando el buzón: {mailbox_addr or '(tu buzón)'}")
 
-        # --- Fecha de corte: solo procesamos correos a partir de aquí ---
-        # DIAS_HISTORICO=1 (por defecto) => solo desde ayer a las 00:00.
-        # Súbelo (ej. 7) o ponlo a 0 para coger también los de hoy sin límite hacia atrás.
+        # --- Fecha de corte de ARRANQUE EN FRÍO ---
+        # Solo se usa cuando la base de datos está vacía (primera vez que se usa
+        # el programa). En marcha normal el corte lo calcula el vigilante a partir
+        # del último correo que ya tenemos guardado, así un parón de días o semanas
+        # se recupera solo. DIAS_HISTORICO=1 => desde ayer a las 00:00.
         dias = int(os.getenv("DIAS_HISTORICO", "1"))
         self.fecha_corte = (datetime.now() - timedelta(days=dias)).replace(
             hour=0, minute=0, second=0, microsecond=0
         )
-        print(f"[INFO] Solo se procesarán correos recibidos desde: {self.fecha_corte:%d/%m/%Y %H:%M}")
+        # Tope de seguridad: por muy atrás que quede el último correo guardado
+        # (o si alguien borra la base de datos), nunca pedimos más de estos días.
+        self.dias_max = int(os.getenv("DIAS_MAX_RECUPERACION", "60"))
+        print(f"[INFO] Corte de arranque en frío: {self.fecha_corte:%d/%m/%Y %H:%M} "
+              f"(tope de recuperación: {self.dias_max} días)")
 
-    def obtener_correos_nuevos(self):
-        """Trae los correos de la Bandeja de Entrada recibidos a partir de la fecha
-        de corte (por defecto, desde ayer).
+    def obtener_correos_nuevos(self, desde: datetime = None):
+        """Trae los correos de la Bandeja de Entrada recibidos a partir de 'desde'
+        (si no se indica, la fecha de corte de arranque en frío).
 
         Importante: en modo SOLO LECTURA no marcamos los correos como leídos, así que
         NO podemos filtrar por 'no leído' (si tú los abres en Outlook desaparecerían
         del filtro). Filtramos solo por fecha y los duplicados se evitan dentro de la
         app (por conversation_id)."""
+        corte = desde or self.fecha_corte
+        # Nunca pedimos más atrás del tope de seguridad
+        limite = datetime.now() - timedelta(days=self.dias_max)
+        if corte < limite:
+            corte = limite
         inbox = self.mailbox.inbox_folder()
         qb = inbox.new_query()
-        flt = qb.greater_equal('receivedDateTime', self.fecha_corte)
-        # El tope debe ser holgado: con DIAS_HISTORICO alto (recuperar un parón)
-        # la bandeja puede traer bastantes más de 50 correos y, al pedir los más
-        # recientes primero, los más antiguos se quedarían fuera para siempre.
+        flt = qb.greater_equal('receivedDateTime', corte)
+        # El tope debe ser holgado: al recuperar un parón largo la bandeja puede
+        # traer bastantes más de 50 correos y, al pedir los más recientes primero,
+        # los más antiguos se quedarían fuera para siempre.
         return inbox.get_messages(
             limit=500, query=flt, order_by="receivedDateTime desc",
             download_attachments=False,
