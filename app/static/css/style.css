@@ -424,15 +424,19 @@ details.form-card[open] > summary::before { content: "▾ "; }
 }
 .fld { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--text-soft); }
 .fld.full { grid-column: 1 / -1; }
-.fld input, .fld textarea {
+.fld input, .fld textarea, .fld select {
     font-size: 14px; color: var(--text);
     border: 1px solid var(--border-strong); border-radius: 6px;
     padding: 7px 10px; font-family: inherit; background: #fff;
 }
-.fld input:focus, .fld textarea:focus {
+.fld input:focus, .fld textarea:focus, .fld select:focus {
     outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft);
 }
 .fld textarea { resize: vertical; }
+/* Desplegable de Empresa: las opciones salen de 'empresas.json'. Si la lista es
+   larga el navegador la muestra con su propia barra de desplazamiento. */
+.fld select { height: 34px; cursor: pointer; }
+.sel-empresa optgroup { font-style: normal; color: var(--text-faint); }
 .form-actions { display: flex; gap: 10px; margin-top: 14px; flex-wrap: wrap; }
 
 .bloque-titulo {
@@ -526,6 +530,22 @@ details.sug-card[open] > summary::before { content: "▾ "; }
 }
 .bubble.system { align-self: flex-end; background: var(--accent-soft); border-color: #cfe1f4; }
 .bubble .sender { font-weight: 600; font-size: 12.5px; margin-bottom: 4px; color: var(--accent-dark); }
+/* Cabecera de la burbuja: remitente a la izquierda, botón de copiar a la derecha */
+.bubble-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.btn-copiar {
+    flex: 0 0 auto; font-family: inherit; font-size: 11.5px; line-height: 1;
+    color: var(--text-faint); background: transparent;
+    border: 1px solid var(--border); border-radius: 5px; padding: 4px 8px;
+    cursor: pointer; opacity: 0; transition: opacity .12s, background .12s, color .12s;
+}
+/* Solo aparece al pasar por encima, para no ensuciar el hilo. Al enfocarlo con
+   el teclado también se ve (si no, sería inalcanzable sin ratón). */
+.bubble:hover .btn-copiar, .btn-copiar:focus { opacity: 1; }
+.btn-copiar:hover { background: var(--accent-soft); color: var(--accent-dark); border-color: var(--accent); }
+.btn-copiar.copiado { opacity: 1; background: #e6f4ea; color: #1e7b43; border-color: #9bd3b0; }
+/* El texto del correo debe poder seleccionarse con el ratón (en la ventana de
+   escritorio hace falta además text_select=True en app_escritorio.py). */
+.bubble .text { user-select: text; cursor: text; }
 .bubble.system .sender { color: var(--accent-dark); }
 .bubble .text { white-space: pre-wrap; line-height: 1.45; }
 .bubble .stamp { display: block; font-size: 11px; color: var(--text-faint); margin-top: 6px; }

@@ -770,12 +770,30 @@ def api_export_columnas():
     return {"columnas": [{"key": k, "label": v[0]} for k, v in EXPORT_COLUMNS.items()]}
 
 
+def _marcas_bd(db) -> list:
+    """Empresas que aparecen en las incidencias guardadas (orden alfabético)."""
+    filas = db.query(models.ticket.Ticket.empresa).distinct().all()
+    return sorted({(f[0] or "").strip() for f in filas if f and f[0] and f[0].strip()})
+
+
+def _lista_empresas(db) -> list:
+    """La lista oficial de empresas: la de 'empresas.json'. Si ese archivo falta
+    o está vacío, tiramos de las empresas que ya hay en las incidencias, para que
+    los desplegables nunca se queden en blanco."""
+    from app.services.empresas_service import cargar_empresas
+    return cargar_empresas() or _marcas_bd(db)
+
+
+@app.get("/api/v1/empresas")
+def api_empresas(db: Session = Depends(get_db)):
+    """Opciones del desplegable 'Empresa'. Se editan en 'empresas.json'."""
+    return {"empresas": _lista_empresas(db)}
+
+
 @app.get("/api/v1/export/marcas")
 def api_export_marcas(db: Session = Depends(get_db)):
-    """Lista de marcas/empresas distintas (para el selector del export)."""
-    filas = db.query(models.ticket.Ticket.empresa).distinct().all()
-    marcas = sorted({(f[0] or "").strip() for f in filas if f[0]})
-    return {"marcas": marcas}
+    """Lista de marcas/empresas para el selector del export."""
+    return {"marcas": _lista_empresas(db)}
 
 
 @app.get("/api/v1/export/excel")
@@ -1236,10 +1254,8 @@ def api_kpis(periodo: Optional[str] = None, marca: Optional[str] = None, db: Ses
         elif s == "riesgo":
             riesgo += 1
 
-    # Lista de marcas disponibles (de TODAS las incidencias, para el desplegable)
-    marcas_disponibles = sorted({
-        (r[0] or "").strip() for r in db.query(models.ticket.Ticket.empresa).distinct().all() if r[0]
-    })
+    # Opciones del desplegable de marca: la lista oficial de 'empresas.json'
+    marcas_disponibles = _lista_empresas(db)
 
     return {
         "kpis": [{"label": l, "valor": v} for l, v in filas],

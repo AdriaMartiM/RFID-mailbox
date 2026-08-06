@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Gestor de Incidencias RFID</title>
-    <link rel="stylesheet" href="/static/css/style.css?v=20260626e">
+    <link rel="stylesheet" href="/static/css/style.css?v=20260804a">
 </head>
 <body>
 <div class="app">
@@ -417,12 +417,44 @@ function toLocalInput(iso){
     return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
+/* Opciones del desplegable "Empresa". Se editan a mano en 'empresas.json'
+   (raíz del proyecto); el backend relee el archivo solo cuando cambia, así que
+   basta con guardarlo y recargar la página. */
+let EMPRESAS = [];
+async function cargarEmpresas(){
+    try {
+        const r = await fetch("/api/v1/empresas", {cache:"no-store"});
+        EMPRESAS = (await r.json()).empresas || [];
+    } catch(e){ EMPRESAS = []; }
+}
+
+/* Desplegable de Empresa. Las opciones salen de 'empresas.json' (backend).
+   Si la incidencia trae una empresa que NO está en esa lista —las que se
+   rellenan solas con el asunto del correo— la ponemos arriba como «sin
+   clasificar» y seleccionada, para no perderla sin querer al guardar. */
+function selectEmpresa(actual){
+    const valor = (actual || "").trim();
+    const enLista = EMPRESAS.some(e => e.toLowerCase() === valor.toLowerCase());
+    const opciones = EMPRESAS.map(e =>
+        `<option value="${escapeHtml(e)}"${enLista && e.toLowerCase() === valor.toLowerCase() ? " selected" : ""}>${escapeHtml(e)}</option>`
+    ).join("");
+    // Hueco inicial: incidencia sin empresa todavía
+    const vacia = `<option value=""${valor ? "" : " selected"}>— sin asignar —</option>`;
+    // El valor actual sin clasificar, arriba del todo y ya seleccionado
+    const suelta = (valor && !enLista)
+        ? `<optgroup label="Sin clasificar (valor actual)">
+               <option value="${escapeHtml(valor)}" selected>${escapeHtml(valor)}</option>
+           </optgroup>`
+        : "";
+    return `<select id="f_empresa" class="sel-empresa" size="1">${vacia}${suelta}${opciones}</select>`;
+}
+
 // Formulario de datos editables de la incidencia
 function camposFormulario(t){
     return `
         <div class="form-grid">
             <label class="fld"><span>Empresa</span>
-                <input id="f_empresa" value="${escapeHtml(t.empresa)}"></label>
+                ${selectEmpresa(t.empresa)}</label>
             <label class="fld"><span>Localización</span>
                 <input id="f_localizacion" value="${escapeHtml(t.localizacion)}"></label>
             <label class="fld"><span>Teléfono de contacto</span>
@@ -530,11 +562,23 @@ function renderReader(t){
     const cont = $("#readerContent");
     const esNueva = t.estado === "PROCESADO";
 
+    // Textos de las burbujas, para el botón "Copiar" de cada una. El índice del
+    // botón apunta a esta lista (no metemos el texto en el HTML: se rompería con
+    // las comillas y los saltos de línea del correo).
+    const textosCopiar = [];
+    const btnCopiar = texto => {
+        const i = textosCopiar.push(texto || "") - 1;
+        return `<button class="btn-copiar" data-copiar="${i}" title="Copiar el texto de este mensaje">Copiar</button>`;
+    };
+
     // El primer correo del hilo es el ORIGINAL inmutable (no cambia al editar la descripción)
     const cuerpoInicial = t.cuerpo_inicial != null ? t.cuerpo_inicial : t.descripcion;
     const mensajeInicial = `
         <div class="bubble initial">
-            <div class="sender">Mensaje recibido</div>
+            <div class="bubble-head">
+                <div class="sender">Mensaje recibido</div>
+                ${btnCopiar(cuerpoInicial)}
+            </div>
             <div class="text">${escapeHtml(cuerpoInicial) || "Sin contenido."}</div>
             ${renderAdjuntos(t.adjuntos_inicial)}
             <span class="stamp">${formatFecha(t.created_at)}</span>
@@ -548,7 +592,10 @@ function renderReader(t){
     // Más recientes ARRIBA: invertimos el orden de los mensajes.
     const mensajes = (t.mensajes || []).slice().reverse().map(m => `
         <div class="bubble ${/sistema|software|stcretail/i.test(m.remitente||"") ? "system" : ""}">
-            <div class="sender">${escapeHtml(m.remitente) || "—"}</div>
+            <div class="bubble-head">
+                <div class="sender">${escapeHtml(m.remitente) || "—"}</div>
+                ${btnCopiar(m.contenido)}
+            </div>
             ${m.contenido ? `<div class="text">${escapeHtml(m.contenido)}</div>` : ""}
             ${reenviadoHtml(m.reenviado_a)}
             ${renderAdjuntos(m.adjuntos)}
@@ -627,6 +674,10 @@ function renderReader(t){
     // El próximo paso se guarda solo al salir del campo (sin recargar el panel)
     const pp = $("#f_proximo_paso");
     if(pp) pp.addEventListener("change", () => guardarProximoPaso(t.ticket_id));
+
+    // Botón "Copiar" de cada burbuja del hilo
+    $$("[data-copiar]", cont).forEach(b =>
+        b.addEventListener("click", () => copiarTexto(textosCopiar[parseInt(b.dataset.copiar, 10)], b)));
 
     const chat = $("#chat", cont);
     if(chat) chat.scrollTop = 0;   // lo más reciente está arriba
@@ -784,7 +835,9 @@ function pintarColumnas(){
 }
 
 function pintarMarcas(){
-    const marcas = [...new Set(allTickets.map(t => (t.empresa||"").trim()).filter(Boolean))].sort();
+    // Las marcas del filtro salen de 'empresas.json', no de lo que haya en las
+    // incidencias: así el desplegable queda limpio y en el orden que tú decidas.
+    const marcas = EMPRESAS;
     const sel = $("#expMarca");
     sel.innerHTML = '<option value="TODAS">Todas las marcas</option>' +
         marcas.map(m => `<option value="${escapeHtml(m)}">${escapeHtml(m)}</option>`).join("");
@@ -855,7 +908,9 @@ if(_est && ESTADO_LABEL[_est]){
     $$(".folder[data-estado]").forEach(x => x.classList.toggle("active", x.dataset.estado === _est));
     $("#rangeBar").style.display = (_est === "CERRADO") ? "flex" : "none";
 }
-cargarTickets();
+// Las empresas se cargan ANTES que las incidencias: el desplegable "Empresa"
+// del panel de lectura las necesita ya listas para pintarse.
+cargarEmpresas().then(cargarTickets);
 cargarTemasNav();
 cargarRecordatorios();
 </script>

@@ -1,0 +1,10 @@
+{
+  "_comentario": "Lista de empresas/marcas del desplegable 'Empresa'. Edita este archivo, guarda y recarga la pagina: la app lo relee sola, no hace falta reiniciar. Salen en el mismo orden en que las escribas aqui.",
+  "empresas": [
+    "Acuria",
+    "BBB",
+    "Bimani",
+    "Blue Banana",
+    "Nude Project"
+  ]
+}

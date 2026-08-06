@@ -174,8 +174,13 @@ def main():
 
     # 3) Ventana de escritorio
     try:
+        # text_select=True es IMPRESCINDIBLE: pywebview crea la ventana con la
+        # selección de texto DESACTIVADA por defecto, y sin ella no se puede
+        # marcar ni copiar nada del hilo de correos (ni con Ctrl+C ni con el
+        # botón derecho). En un navegador normal no pasa; solo en esta ventana.
         ventana = webview.create_window(
             "Incidencias RFID", URL, width=1280, height=820, min_size=(900, 600),
+            text_select=True,
         )
         _estado["window"] = ventana
         ventana.events.closing += _al_cerrar
